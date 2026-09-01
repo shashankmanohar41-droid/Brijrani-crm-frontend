@@ -6,8 +6,8 @@ const getBaseURL = () => {
   }
   if (typeof window !== 'undefined') {
     const hostname = window.location.hostname;
-    if (hostname.includes('vercel.app') || hostname.includes('brijrani-crm-frontend')) {
-      return 'https://brijrani-crm-backend.vercel.app/api/v1';
+    if (hostname.includes('vercel.app') || hostname.includes('brijrani')) {
+      return 'https://brijrani-crm-backend-sigma.vercel.app/api/v1';
     }
   }
   return 'http://localhost:5000/api/v1';
