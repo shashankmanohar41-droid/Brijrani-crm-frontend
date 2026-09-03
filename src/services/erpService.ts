@@ -444,7 +444,7 @@ export const erpService = {
     }
   },
 
-  // 3. Create GRN & update PO status
+  // 3. Create GRN & update PO and Invoice status
   createGRNFromPO: (grnData: any): GRN => {
     const db = getDb();
     const grnNo = `GRN/BR/2026-27/${String(db.grns.length + 1).padStart(3, '0')}`;
@@ -452,33 +452,68 @@ export const erpService = {
     
     const items = grnData.items || [];
     const firstItem = items[0];
-    const totalOrderedQty = items.reduce((sum: number, i: any) => sum + i.orderedQty, 0);
-    const totalReceivedQty = items.reduce((sum: number, i: any) => sum + i.receivedNow, 0);
+    const totalOrderedQty = items.reduce((sum: number, i: any) => sum + (i.orderedQty || i.quantity || 0), 0);
+    const totalReceivedQty = items.reduce((sum: number, i: any) => sum + (i.receivedNow || i.quantity || 0), 0);
 
     const newGrn: GRN = {
       ...grnData,
       id,
       grnNo,
-      qualityStatus: 'Pending',
+      qualityStatus: 'Passed',
       inwardStatus: 'Pending',
-      status: 'Pending QC',
+      status: 'Accepted',
       items,
       // Fallback root properties
       commodityId: grnData.commodityId || firstItem?.item || '',
       orderedQty: grnData.orderedQty || totalOrderedQty,
       receivedQty: grnData.receivedQty || totalReceivedQty,
-      acceptedQty: 0,
+      acceptedQty: grnData.acceptedQty || totalReceivedQty,
       rejectedQty: 0,
       weight: grnData.weight || totalReceivedQty,
-      batchNo: grnData.batchNo || `BAT-${Date.now().toString().slice(-4)}`
+      batchNo: grnData.batchNo || `BAT-${Date.now().toString().slice(-4)}`,
+      invoiceId: grnData.invoiceId,
+      invoiceNo: grnData.invoiceNo,
+      qcId: grnData.qcId,
+      qcNo: grnData.qcNo
     };
     
     db.grns.push(newGrn);
 
     // Update PO status
-    const po = db.purchaseOrders.find(p => p.id === grnData.poId);
+    const po = db.purchaseOrders.find(p => p.id === grnData.poId || p.poNo === grnData.poNo);
     if (po) {
       po.status = 'Partially Received';
+    }
+
+    // Update linked Purchase Invoice grnNumber & re-verify match
+    let inv = (grnData.invoiceId || grnData.invoiceNo)
+      ? db.purchaseInvoices.find(i => i.id === grnData.invoiceId || i.invoiceNo === grnData.invoiceNo)
+      : null;
+    
+    if (!inv && (grnData.poId || grnData.poNo)) {
+      inv = db.purchaseInvoices.find(i => (i.poNumber === grnData.poNo || (po && i.poNumber === po.poNo)) && !i.grnNumber);
+    }
+
+    if (inv) {
+      inv.grnNumber = grnNo;
+      // Update receivedQty in invoice items from GRN
+      inv.items = inv.items.map(it => {
+        const git = items.find((gi: any) => gi.item === it.item || String(gi.item) === String(it.item));
+        return {
+          ...it,
+          receivedQty: git ? git.acceptedQuantity : it.receivedQty
+        };
+      });
+      // Re-run match check
+      const match = erpService.verifyThreeWayMatch(inv);
+      inv.status = match.isMatch ? 'Matched' : 'Mismatch';
+      inv.mismatchReason = match.isMatch ? undefined : match.details.join('; ');
+      
+      // Sync update to backend if id is backend ObjectId
+      if (inv.id.match(/^[0-9a-fA-F]{24}$/)) {
+        api.patch(`/procurement/invoices/${inv.id}`, inv)
+          .catch(err => console.error('Failed to sync linked invoice update to backend:', err));
+      }
     }
 
     saveDb(db);
@@ -509,44 +544,48 @@ export const erpService = {
     const db = getDb();
     const id = `QI-${Date.now()}`;
     const date = new Date().toISOString().split('T')[0];
+    const qcNo = qiData.qcNo || `QC/BR/2026-27/${String(db.qualityInspections.length + 1).padStart(3, '0')}`;
 
     const newQi: QualityInspection = {
       ...qiData,
       id,
+      qcNo,
       date
     };
 
     db.qualityInspections.push(newQi);
 
-    // Update GRN quality status
-    const grn = db.grns.find(g => g.id === qiData.grnId || g.grnNo === qiData.grnNo);
-    if (grn) {
-      grn.qualityStatus = qiData.status;
-      grn.status = qiData.status === 'Passed' ? 'Accepted' : qiData.status === 'Rejected' ? 'Rejected' : 'Accepted';
-      
-      // Update item quantities based on inspection results
-      if (qiData.items) {
-        qiData.items.forEach((qiItem: any) => {
-          const grnItem = grn.items.find(i => i.item === qiItem.item);
-          if (grnItem) {
-            grnItem.acceptedQuantity = qiItem.status === 'Rejected' ? 0 : grnItem.receivedNow - (qiItem.rejectedQuantity || 0) - (qiItem.damagedQuantity || 0);
-            grnItem.rejectedQuantity = qiItem.rejectedQuantity || 0;
-            grnItem.damagedQuantity = qiItem.damagedQuantity || 0;
-            grnItem.pendingQuantity = Math.max(0, grnItem.orderedQty - grnItem.previouslyReceived - grnItem.acceptedQuantity);
-            grnItem.totalReceived = grnItem.previouslyReceived + grnItem.acceptedQuantity;
-            grnItem.batchNo = grnItem.batchNo || `BAT-${Date.now().toString().slice(-4)}`;
-          }
-        });
-      }
+    // Update GRN quality status if GRN is linked
+    if (qiData.grnId || qiData.grnNo) {
+      const grn = db.grns.find(g => g.id === qiData.grnId || g.grnNo === qiData.grnNo);
+      if (grn) {
+        grn.qualityStatus = qiData.status;
+        grn.status = qiData.status === 'Passed' ? 'Accepted' : qiData.status === 'Rejected' ? 'Rejected' : 'Accepted';
+        grn.qcId = id;
+        grn.qcNo = qcNo;
+        
+        if (qiData.items) {
+          qiData.items.forEach((qiItem: any) => {
+            const grnItem = grn.items.find(i => i.item === qiItem.item);
+            if (grnItem) {
+              grnItem.acceptedQuantity = qiItem.status === 'Rejected' ? 0 : grnItem.receivedNow - (qiItem.rejectedQuantity || 0) - (qiItem.damagedQuantity || 0);
+              grnItem.rejectedQuantity = qiItem.rejectedQuantity || 0;
+              grnItem.damagedQuantity = qiItem.damagedQuantity || 0;
+              grnItem.pendingQuantity = Math.max(0, grnItem.orderedQty - grnItem.previouslyReceived - grnItem.acceptedQuantity);
+              grnItem.totalReceived = grnItem.previouslyReceived + grnItem.acceptedQuantity;
+              grnItem.batchNo = grnItem.batchNo || `BAT-${Date.now().toString().slice(-4)}`;
+            }
+          });
+        }
 
-      // Sync root properties
-      const firstItem = grn.items[0];
-      if (firstItem) {
-        grn.acceptedQty = grn.items.reduce((sum, i) => sum + i.acceptedQuantity, 0);
-        grn.rejectedQty = grn.items.reduce((sum, i) => sum + i.rejectedQuantity, 0);
-        grn.receivedQty = grn.items.reduce((sum, i) => sum + i.receivedNow, 0);
-        grn.commodityId = grn.commodityId || firstItem.item;
-        grn.batchNo = firstItem.batchNo;
+        const firstItem = grn.items[0];
+        if (firstItem) {
+          grn.acceptedQty = grn.items.reduce((sum, i) => sum + i.acceptedQuantity, 0);
+          grn.rejectedQty = grn.items.reduce((sum, i) => sum + i.rejectedQuantity, 0);
+          grn.receivedQty = grn.items.reduce((sum, i) => sum + i.receivedNow, 0);
+          grn.commodityId = grn.commodityId || firstItem.item;
+          grn.batchNo = firstItem.batchNo;
+        }
       }
     }
 
@@ -561,11 +600,6 @@ export const erpService = {
           const idx = currentDb.qualityInspections.findIndex(q => q.id === newQi.id);
           if (idx !== -1) {
             currentDb.qualityInspections[idx].id = backendItem._id;
-          }
-          const grnIdx = currentDb.grns.findIndex(g => g.id === qiData.grnId || g.grnNo === qiData.grnNo);
-          if (grnIdx !== -1) {
-            currentDb.grns[grnIdx].qualityStatus = qiData.status;
-            currentDb.grns[grnIdx].status = qiData.status === 'Passed' ? 'Accepted' : qiData.status === 'Rejected' ? 'Rejected' : 'Accepted';
           }
           saveDb(currentDb);
           if (typeof window !== 'undefined') {
@@ -660,47 +694,67 @@ export const erpService = {
     saveDb(db);
   },
 
-  // 3-Way Match Verification
+  // 3-Way Match Verification (Supports PO + QC + Invoice + GRN lifecycle)
   verifyThreeWayMatch: (invoice: PurchaseInvoice): { isMatch: boolean; details: string[] } => {
     const db = getDb();
     const po = db.purchaseOrders.find(p => p.poNo === invoice.poNumber);
-    const grn = db.grns.find(g => g.grnNo === invoice.grnNumber);
+    const qc = invoice.qcNumber ? db.qualityInspections.find(q => q.qcNo === invoice.qcNumber || q.id === invoice.qcId) : null;
+    const grn = invoice.grnNumber ? db.grns.find(g => g.grnNo === invoice.grnNumber) : null;
     const warnings: string[] = [];
 
     if (!po) {
       warnings.push(`Reference PO ${invoice.poNumber} not found.`);
       return { isMatch: false, details: warnings };
     }
-    if (!grn) {
-      warnings.push(`Reference GRN ${invoice.grnNumber} not found.`);
-      return { isMatch: false, details: warnings };
-    }
 
     invoice.items.forEach(invItem => {
       const poItem = po.items?.find(i => i.item === invItem.item || String(i.item) === String(invItem.item));
-      const grnItem = grn.items?.find(i => i.item === invItem.item || String(i.item) === String(invItem.item));
+      const qcItem = qc?.items?.find((i: any) => i.item === invItem.item || String(i.item) === String(invItem.item));
+      const grnItem = grn?.items?.find(i => i.item === invItem.item || String(i.item) === String(invItem.item));
 
       if (!poItem) {
         warnings.push(`Item "${invItem.item}" not found in PO.`);
         return;
       }
-      if (!grnItem) {
-        warnings.push(`Item "${invItem.item}" not found in GRN.`);
-        return;
-      }
 
-      if (invItem.invoiceQty > grnItem.acceptedQuantity) {
-        warnings.push(`Item "${invItem.item}": Invoice quantity (${invItem.invoiceQty}) exceeds QC accepted quantity (${grnItem.acceptedQuantity}) by ${invItem.invoiceQty - grnItem.acceptedQuantity} units.`);
-      }
-
+      // Check against PO rate
       if (invItem.rate > poItem.rate) {
         warnings.push(`Item "${invItem.item}": Invoice rate (₹${invItem.rate}) exceeds PO rate (₹${poItem.rate}) by ₹${invItem.rate - poItem.rate}.`);
       }
+
+      // Check against PO quantity if no GRN yet
+      if (!grn && invItem.invoiceQty > poItem.quantity) {
+        warnings.push(`Item "${invItem.item}": Invoice quantity (${invItem.invoiceQty}) exceeds PO quantity (${poItem.quantity}) by ${invItem.invoiceQty - poItem.quantity} units.`);
+      }
+
+      // Check against QC accepted quantity if QC is completed
+      if (qc && qcItem) {
+        const qcAccepted = (qcItem as any).acceptedQuantity !== undefined 
+          ? (qcItem as any).acceptedQuantity 
+          : ((qc.decision === 'ACCEPT' || qc.status === 'Passed') ? qcItem.quantity : 0);
+        if (invItem.invoiceQty > qcAccepted) {
+          warnings.push(`Item "${invItem.item}": Billed quantity (${invItem.invoiceQty}) exceeds QC certified accepted quantity (${qcAccepted}) by ${invItem.invoiceQty - qcAccepted} units.`);
+        }
+      }
+
+      // Check against GRN if GRN is inwarded
+      if (grn && grnItem) {
+        if (invItem.invoiceQty > grnItem.acceptedQuantity) {
+          warnings.push(`Item "${invItem.item}": Invoice quantity (${invItem.invoiceQty}) exceeds GRN accepted quantity (${grnItem.acceptedQuantity}) by ${invItem.invoiceQty - grnItem.acceptedQuantity} units.`);
+        }
+      }
     });
 
+    const isMatch = warnings.length === 0;
+    const matchMsg = grn 
+      ? '3-Way Match Verification Passed (PO + QC + Invoice + GRN Match).'
+      : qc 
+      ? 'QC & PO Verification Passed. Ready for Gate Inward (GRN).'
+      : 'PO Commercial Verification Passed (PO & Invoice Match; awaiting GRN Gate Receipt).';
+
     return {
-      isMatch: warnings.length === 0,
-      details: warnings.length === 0 ? ['All quantities and rates match. Ready for verification.'] : warnings
+      isMatch,
+      details: isMatch ? [matchMsg] : warnings
     };
   },
 
@@ -1012,6 +1066,25 @@ export const erpService = {
         } else {
           invoice.paymentStatus = 'Partially Paid';
         }
+      }
+    } else if (newVch.referenceNo && newVch.voucherType === 'Payment') {
+      const pInvoice = db.purchaseInvoices.find(inv => inv.invoiceNo === newVch.referenceNo || inv.id === newVch.referenceNo);
+      if (pInvoice) {
+        const curPaid = pInvoice.amountPaid || 0;
+        const newPaid = curPaid + newVch.amount;
+        const newRem = Math.max(0, pInvoice.grandTotal - newPaid);
+        pInvoice.amountPaid = newPaid;
+        pInvoice.remainingAmount = newRem;
+        pInvoice.status = newRem === 0 ? 'Paid' : 'Partially Paid';
+        pInvoice.paymentHistory = pInvoice.paymentHistory || [];
+        pInvoice.paymentHistory.push({
+          date: newVch.date,
+          reference: newVch.referenceNo,
+          mode: newVch.paymentMode,
+          account: newVch.cashBankLink,
+          amount: newVch.amount,
+          notes: newVch.narration
+        });
       }
     }
 

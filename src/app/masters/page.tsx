@@ -6,18 +6,34 @@ import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useErp } from '../../context/ErpContext';
 import { erpService } from '../../services/erpService';
+import api from '../../services/axios';
 import DataTable from '../../components/shared/DataTable';
-import { Plus, Database, UserCheck, ShieldAlert, CheckCircle, Trash2, Edit3, Eye, X, Building2, Phone, Mail, MapPin, CreditCard, Landmark } from 'lucide-react';
+import { Plus, Database, UserCheck, ShieldAlert, CheckCircle, Trash2, Edit3, Eye, X, Building2, Phone, Mail, MapPin, CreditCard, Landmark, FlaskConical, Settings } from 'lucide-react';
 
 function MastersHubPageContent() {
   const searchParams = useSearchParams();
   const { db, refreshDb, showToast } = useErp();
 
-  const tabQuery = searchParams.get('tab') as 'customers' | 'suppliers' | 'farmers' | 'commodities' | 'warehouses' | 'bins' | 'vehicles' | 'drivers';
-  const [activeTab, setActiveTab] = useState<'customers' | 'suppliers' | 'farmers' | 'commodities' | 'warehouses' | 'bins' | 'vehicles' | 'drivers'>(tabQuery || 'customers');
+  const tabQuery = searchParams.get('tab') as 'customers' | 'suppliers' | 'farmers' | 'commodities' | 'qualitySpecs' | 'warehouses' | 'bins' | 'vehicles' | 'drivers';
+  const [activeTab, setActiveTab] = useState<'customers' | 'suppliers' | 'farmers' | 'commodities' | 'qualitySpecs' | 'warehouses' | 'bins' | 'vehicles' | 'drivers'>(tabQuery || 'customers');
   
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [viewingRecord, setViewingRecord] = useState<any>(null);
+
+  // Quality Specification States
+  const [specsList, setSpecsList] = useState<any[]>([
+    { _id: '1', commodityId: db.commodities[0]?.id || 'CMD-001', parameterName: 'Moisture', limitType: '<=', maxLimit: 14, unit: '%', isOptional: false },
+    { _id: '2', commodityId: db.commodities[0]?.id || 'CMD-001', parameterName: 'Foreign Material', limitType: '<=', maxLimit: 2, unit: '%', isOptional: false }
+  ]);
+  const [specCommodityId, setSpecCommodityId] = useState('');
+  const [specParamName, setSpecParamName] = useState('');
+  const [specLimitType, setSpecLimitType] = useState<'<=' | '>=' | 'Range' | '=' | 'Text'>('<=');
+  const [specMinLimit, setSpecMinLimit] = useState<number | ''>('');
+  const [specMaxLimit, setSpecMaxLimit] = useState<number | ''>('');
+  const [specTextValue, setSpecTextValue] = useState('');
+  const [specTolerance, setSpecTolerance] = useState<number | ''>('');
+  const [specUnit, setSpecUnit] = useState('%');
+  const [specIsOptional, setSpecIsOptional] = useState(false);
 
   // Sync activeTab state with URL tab changes (essential for redirects like Bins & Racks)
   useEffect(() => {
@@ -26,6 +42,58 @@ function MastersHubPageContent() {
     }
   }, [tabQuery]);
 
+  // Load backend specs on mount
+  useEffect(() => {
+    api.get('/procurement/quality-inspections/specs')
+      .then(res => {
+        if (res.data?.data && res.data.data.length > 0) {
+          setSpecsList(res.data.data);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleSaveSpec = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!specCommodityId || !specParamName || !specUnit) {
+      showToast('Please fill all required specification fields', 'error');
+      return;
+    }
+    const newSpec = {
+      _id: `SPEC-${Date.now()}`,
+      commodityId: specCommodityId,
+      parameterName: specParamName,
+      limitType: specLimitType,
+      minLimit: specMinLimit !== '' ? Number(specMinLimit) : undefined,
+      maxLimit: specMaxLimit !== '' ? Number(specMaxLimit) : undefined,
+      textValue: specTextValue,
+      tolerancePercent: specTolerance !== '' ? Number(specTolerance) : undefined,
+      unit: specUnit,
+      isOptional: specIsOptional
+    };
+
+    try {
+      await api.post('/procurement/quality-inspections/specs', newSpec);
+    } catch {}
+
+    setSpecsList(prev => [...prev, newSpec]);
+    showToast('Quality Specification constraint added successfully', 'success');
+    setSpecParamName('');
+    setSpecMinLimit('');
+    setSpecMaxLimit('');
+    setSpecTextValue('');
+    setSpecTolerance('');
+  };
+
+  const handleDeleteSpec = async (id: string) => {
+    if (!confirm('Are you sure you want to remove this specification constraint?')) return;
+    try {
+      await api.delete(`/procurement/quality-inspections/specs/${id}`);
+    } catch {}
+    setSpecsList(prev => prev.filter(s => s._id !== id && s.id !== id));
+    showToast('Specification constraint removed', 'success');
+  };
+
   // Bin States
   const [binCode, setBinCode] = useState('');
   const [binWarehouseId, setBinWarehouseId] = useState('');
@@ -33,7 +101,7 @@ function MastersHubPageContent() {
 
   const handleDelete = (tab: typeof activeTab, id: string, displayName: string) => {
     if (confirm(`Are you sure you want to delete "${displayName}"?`)) {
-      erpService[tab].delete(id);
+      (erpService as any)[tab]?.delete(id);
       showToast(`Entry "${displayName}" deleted`, 'success');
       refreshDb();
     }
@@ -381,6 +449,7 @@ function MastersHubPageContent() {
           { key: 'suppliers', label: 'Suppliers' },
           { key: 'farmers', label: 'Farmers' },
           { key: 'commodities', label: 'Commodities' },
+          { key: 'qualitySpecs', label: 'Quality Specs Master' },
           { key: 'warehouses', label: 'Warehouses' },
           { key: 'vehicles', label: 'Vehicles' },
           { key: 'drivers', label: 'Drivers' }
@@ -616,6 +685,246 @@ function MastersHubPageContent() {
             searchField="name"
             exportFileName="commodities_master"
           />
+        )}
+
+        {activeTab === 'qualitySpecs' && (
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 w-full animate-fade-in">
+            {/* Form Left Column */}
+            <div className="xl:col-span-5 bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-4">
+              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                <Settings size={18} className="text-emerald-600" />
+                <span>Configure Commodity Specifications</span>
+              </h3>
+              <p className="text-xs text-slate-400">
+                Establish laboratory quality parameters, acceptable tolerances, and rejection rules per agricultural commodity.
+              </p>
+
+              <form onSubmit={handleSaveSpec} className="space-y-3.5 pt-1">
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Select Commodity *</label>
+                  <select 
+                    className="w-full p-2.5 border border-slate-200 rounded-lg text-xs bg-white text-slate-800 font-medium"
+                    value={specCommodityId}
+                    onChange={(e) => setSpecCommodityId(e.target.value)}
+                    required
+                  >
+                    <option value="">-- Choose Commodity --</option>
+                    {db.commodities.map(c => (
+                      <option key={c.id} value={c.id || c._id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Parameter Name *</label>
+                  <input 
+                    type="text" 
+                    className="w-full p-2.5 border border-slate-200 rounded-lg text-xs text-slate-800"
+                    placeholder="e.g. Moisture, Foreign Material, Admixture"
+                    value={specParamName}
+                    onChange={e => setSpecParamName(e.target.value)}
+                    required
+                  />
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {[
+                      { name: 'Moisture', type: '<=', max: 12.0, unit: '%' },
+                      { name: 'Foreign Material', type: '<=', max: 1.5, unit: '%' },
+                      { name: 'Broken Grains', type: '<=', max: 3.0, unit: '%' },
+                      { name: 'Damaged Grains', type: '<=', max: 2.0, unit: '%' },
+                      { name: 'Admixture', type: '<=', max: 1.0, unit: '%' }
+                    ].map((p, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => {
+                          setSpecParamName(p.name);
+                          setSpecLimitType(p.type as any);
+                          setSpecMaxLimit(p.max);
+                          setSpecMinLimit('');
+                          setSpecUnit(p.unit);
+                        }}
+                        className="text-[10px] bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 px-2 py-1 rounded-md border border-slate-200 transition font-medium cursor-pointer"
+                      >
+                        + {p.name} (&le; {p.max}{p.unit})
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Constraint Type *</label>
+                    <select 
+                      className="w-full p-2.5 border border-slate-200 rounded-lg text-xs bg-white text-slate-800"
+                      value={specLimitType}
+                      onChange={(e) => setSpecLimitType(e.target.value as any)}
+                      required
+                    >
+                      <option value="<=">&lt;= Max Allowed</option>
+                      <option value=">=">&gt;= Min Required</option>
+                      <option value="Range">Range Limit</option>
+                      <option value="=">Exact Value</option>
+                      <option value="Text">Text Check</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Unit *</label>
+                    <input 
+                      type="text" 
+                      className="w-full p-2.5 border border-slate-200 rounded-lg text-xs text-slate-800"
+                      placeholder="e.g. %, mm, Grade"
+                      value={specUnit}
+                      onChange={e => setSpecUnit(e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+
+                {specLimitType === 'Range' ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Min Value *</label>
+                      <input 
+                        type="number" 
+                        step="any"
+                        className="w-full p-2.5 border border-slate-200 rounded-lg text-xs text-slate-800"
+                        value={specMinLimit}
+                        onChange={e => setSpecMinLimit(e.target.value !== '' ? Number(e.target.value) : '')}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Max Value *</label>
+                      <input 
+                        type="number" 
+                        step="any"
+                        className="w-full p-2.5 border border-slate-200 rounded-lg text-xs text-slate-800"
+                        value={specMaxLimit}
+                        onChange={e => setSpecMaxLimit(e.target.value !== '' ? Number(e.target.value) : '')}
+                        required
+                      />
+                    </div>
+                  </div>
+                ) : specLimitType === 'Text' || specLimitType === '=' ? (
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Compare Value *</label>
+                    <input 
+                      type="text" 
+                      className="w-full p-2.5 border border-slate-200 rounded-lg text-xs text-slate-800"
+                      placeholder="e.g. Bright Yellow, 12"
+                      value={specTextValue}
+                      onChange={e => setSpecTextValue(e.target.value)}
+                      required
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Limit Boundary *</label>
+                    <input 
+                      type="number" 
+                      step="any"
+                      className="w-full p-2.5 border border-slate-200 rounded-lg text-xs text-slate-800"
+                      value={specMinLimit || specMaxLimit}
+                      onChange={e => {
+                        setSpecMinLimit(e.target.value !== '' ? Number(e.target.value) : '');
+                        setSpecMaxLimit(e.target.value !== '' ? Number(e.target.value) : '');
+                      }}
+                      required
+                    />
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2 pt-1">
+                  <input 
+                    type="checkbox" 
+                    id="opt-master"
+                    checked={specIsOptional}
+                    onChange={e => setSpecIsOptional(e.target.checked)}
+                    className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <label htmlFor="opt-master" className="text-xs text-slate-600 cursor-pointer font-medium">
+                    Flag as Optional Parameter (Trigger WARN instead of FAIL rejection)
+                  </label>
+                </div>
+
+                <button 
+                  type="submit"
+                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs shadow-md shadow-emerald-600/10 cursor-pointer transition flex items-center justify-center gap-1.5"
+                >
+                  <Plus size={15} />
+                  <span>Add Specification Constraint</span>
+                </button>
+              </form>
+            </div>
+
+            {/* Specs Master Log Table */}
+            <div className="xl:col-span-7 bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                  <FlaskConical size={18} className="text-indigo-600" />
+                  <span>Quality Specifications Master Log</span>
+                </h3>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                  {specsList.length} Active Rules
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-400 uppercase text-[9px] font-bold tracking-wider">
+                      <th className="py-2.5 px-3">Commodity</th>
+                      <th className="py-2.5 px-3">Parameter Name</th>
+                      <th className="py-2.5 px-3">Constraint Limit</th>
+                      <th className="py-2.5 px-3">Breach Policy</th>
+                      <th className="py-2.5 px-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {specsList.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="text-center py-10 text-slate-400 font-medium">
+                          No quality specifications configured yet. Add your first commodity parameter on the left.
+                        </td>
+                      </tr>
+                    ) : (
+                      specsList.map(s => {
+                        const comm = db.commodities.find(c => c.id === s.commodityId || c._id === s.commodityId);
+                        const limitLabel = s.limitType === 'Range' 
+                          ? `${s.minLimit} - ${s.maxLimit} ${s.unit}` 
+                          : `${s.limitType} ${s.maxLimit !== undefined ? s.maxLimit : s.minLimit !== undefined ? s.minLimit : s.textValue} ${s.unit}`;
+                        return (
+                          <tr key={s._id || s.id} className="border-b border-slate-100 hover:bg-slate-50/60 transition">
+                            <td className="py-3 px-3 font-bold text-slate-800">{comm ? comm.name : 'All / ' + s.commodityId}</td>
+                            <td className="py-3 px-3 font-semibold text-slate-700">{s.parameterName}</td>
+                            <td className="py-3 px-3 font-mono font-bold text-indigo-600">{limitLabel}</td>
+                            <td className="py-3 px-3">
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${
+                                s.isOptional 
+                                  ? 'bg-amber-50 text-amber-600 border-amber-200' 
+                                  : 'bg-red-50 text-red-600 border-red-200'
+                              }`}>
+                                {s.isOptional ? 'Warn only' : 'Mandatory (FAIL)'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 text-right">
+                              <button 
+                                onClick={() => handleDeleteSpec(s._id || s.id)}
+                                className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition cursor-pointer"
+                                title="Delete constraint"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         )}
 
         {activeTab === 'warehouses' && (

@@ -91,9 +91,9 @@ export default function ProcurementDashboardPage() {
     { name: '1. Enquiry', count: activeEnquiries, subtext: 'Active requests', link: '/procurement/enquiries', desc: 'Identify sourcing needs and contact suppliers.', color: 'border-blue-200 hover:border-blue-400 bg-blue-50 text-blue-900 hover:shadow-md hover:scale-[1.02]', badgeColor: 'bg-blue-600 text-white' },
     { name: '2. Quotations', count: pendingQuotations, subtext: 'Pending reviews', link: '/procurement/quotations', desc: 'Collect and compare quotes to pick the best rate.', color: 'border-indigo-200 hover:border-indigo-400 bg-indigo-50 text-indigo-900 hover:shadow-md hover:scale-[1.02]', badgeColor: 'bg-indigo-600 text-white' },
     { name: '3. Purchase Orders', count: activeOrders, subtext: 'Open POs', link: '/procurement/orders', desc: 'Release signed purchasing agreements.', color: 'border-violet-200 hover:border-violet-400 bg-violet-50 text-violet-900 hover:shadow-md hover:scale-[1.02]', badgeColor: 'bg-violet-600 text-white' },
-    { name: '4. Inward (GRN)', count: grns.filter(g => g.inwardStatus !== 'Completed').length, subtext: 'Pending inwarding', link: '/procurement/grn', desc: 'Log cargo entry & vehicle weighing at the gate.', color: 'border-purple-200 hover:border-purple-400 bg-purple-50 text-purple-900 hover:shadow-md hover:scale-[1.02]', badgeColor: 'bg-purple-600 text-white' },
-    { name: '5. Quality Control', count: pendingQcCount, subtext: 'Awaiting QC', link: '/procurement/qc', desc: 'Run laboratory parameters test checks.', color: 'border-pink-200 hover:border-pink-400 bg-pink-50 text-pink-900 hover:shadow-md hover:scale-[1.02]', badgeColor: 'bg-pink-600 text-white' },
-    { name: '6. Invoices', count: unpaidInvoices, subtext: 'Unpaid bills', link: '/procurement/invoices', desc: 'Match vendor billing details for clearance.', color: 'border-amber-200 hover:border-amber-400 bg-amber-50 text-amber-900 hover:shadow-md hover:scale-[1.02]', badgeColor: 'bg-amber-600 text-white' },
+    { name: '4. Quality Control', count: pendingQcCount, subtext: 'Awaiting QC', link: '/procurement/qc', desc: 'Run laboratory parameters & cargo quality testing.', color: 'border-pink-200 hover:border-pink-400 bg-pink-50 text-pink-900 hover:shadow-md hover:scale-[1.02]', badgeColor: 'bg-pink-600 text-white' },
+    { name: '5. Purchase Invoices', count: unpaidInvoices, subtext: 'Unpaid bills', link: '/procurement/invoices', desc: 'Generate & match vendor bills against PO & QC.', color: 'border-amber-200 hover:border-amber-400 bg-amber-50 text-amber-900 hover:shadow-md hover:scale-[1.02]', badgeColor: 'bg-amber-600 text-white' },
+    { name: '6. Inward (GRN)', count: grns.filter(g => g.inwardStatus !== 'Completed').length, subtext: 'Pending inwarding', link: '/procurement/grn', desc: 'Log gate entry & inward verified goods into bins.', color: 'border-purple-200 hover:border-purple-400 bg-purple-50 text-purple-900 hover:shadow-md hover:scale-[1.02]', badgeColor: 'bg-purple-600 text-white' },
     { name: '7. Returns', count: draftReturns, subtext: 'Active returns', link: '/procurement/returns', desc: 'Send back defective stock & book debit notes.', color: 'border-rose-200 hover:border-rose-400 bg-rose-50 text-rose-900 hover:shadow-md hover:scale-[1.02]', badgeColor: 'bg-rose-600 text-white' },
   ];
 
@@ -309,6 +309,38 @@ export default function ProcurementDashboardPage() {
               </Link>
 
               <Link 
+                href="/procurement/qc" 
+                className="flex items-center justify-between p-3 rounded-lg border border-slate-100 hover:border-primary-200 hover:bg-primary-50/10 transition group cursor-pointer"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded bg-pink-50 text-pink-600 flex items-center justify-center">
+                    <Scale size={16} />
+                  </div>
+                  <div>
+                    <span className="font-bold text-slate-700 text-xs block group-hover:text-primary-700">Quality Inspection (QC)</span>
+                    <span className="text-[10px] text-slate-400 block mt-0.5">Audit moisture, purity & parameters</span>
+                  </div>
+                </div>
+                <ArrowRight size={14} className="text-slate-400 group-hover:text-primary-600 transition" />
+              </Link>
+
+              <Link 
+                href="/procurement/invoices" 
+                className="flex items-center justify-between p-3 rounded-lg border border-slate-100 hover:border-primary-200 hover:bg-primary-50/10 transition group cursor-pointer"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded bg-amber-50 text-amber-600 flex items-center justify-center">
+                    <FileCheck size={16} />
+                  </div>
+                  <div>
+                    <span className="font-bold text-slate-700 text-xs block group-hover:text-primary-700">Create Purchase Invoice</span>
+                    <span className="text-[10px] text-slate-400 block mt-0.5">Log & match vendor billing against PO/QC</span>
+                  </div>
+                </div>
+                <ArrowRight size={14} className="text-slate-400 group-hover:text-primary-600 transition" />
+              </Link>
+
+              <Link 
                 href="/procurement/grn" 
                 className="flex items-center justify-between p-3 rounded-lg border border-slate-100 hover:border-primary-200 hover:bg-primary-50/10 transition group cursor-pointer"
               >
@@ -318,23 +350,7 @@ export default function ProcurementDashboardPage() {
                   </div>
                   <div>
                     <span className="font-bold text-slate-700 text-xs block group-hover:text-primary-700">Log Gate Entry (GRN)</span>
-                    <span className="text-[10px] text-slate-400 block mt-0.5">Book arriving transport vehicle</span>
-                  </div>
-                </div>
-                <ArrowRight size={14} className="text-slate-400 group-hover:text-primary-600 transition" />
-              </Link>
-
-              <Link 
-                href="/procurement/returns" 
-                className="flex items-center justify-between p-3 rounded-lg border border-slate-100 hover:border-primary-200 hover:bg-primary-50/10 transition group cursor-pointer"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded bg-rose-50 text-rose-600 flex items-center justify-center">
-                    <AlertTriangle size={16} />
-                  </div>
-                  <div>
-                    <span className="font-bold text-slate-700 text-xs block group-hover:text-primary-700">Initiate Return Request</span>
-                    <span className="text-[10px] text-slate-400 block mt-0.5">Flag sub-standard stock cargo</span>
+                    <span className="text-[10px] text-slate-400 block mt-0.5">Inward cargo into warehouse storage</span>
                   </div>
                 </div>
                 <ArrowRight size={14} className="text-slate-400 group-hover:text-primary-600 transition" />

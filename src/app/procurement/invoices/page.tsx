@@ -3,17 +3,20 @@
 export const dynamic = 'force-dynamic';
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { useErp } from '../../../context/ErpContext';
 import { erpService } from '../../../services/erpService';
 import api from '../../../services/axios';
 import { PurchaseInvoice, PurchaseInvoiceItem, PurchaseOrder, GRN } from '../../../types/erp';
 import { formatDate } from '../../../utils/dateUtils';
 import DataTable from '../../../components/shared/DataTable';
-import { FileText, Plus, Landmark, CheckCircle, AlertTriangle, HelpCircle, Download, FileCheck, ArrowRight, ShieldCheck, Edit3, Wallet, Eye, Trash2 } from 'lucide-react';
+import { FileText, Plus, Landmark, CheckCircle, AlertTriangle, HelpCircle, Download, FileCheck, ArrowRight, ShieldCheck, Edit3, Wallet, Eye, Trash2, Truck } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import IndianDateInput from '../../../components/shared/IndianDateInput';
 
 export default function PurchaseInvoicesPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { db, refreshDb, currentUserRole, showToast } = useErp();
 
   const [selectedInvoice, setSelectedInvoice] = useState<PurchaseInvoice | null>(null);
@@ -34,6 +37,8 @@ export default function PurchaseInvoicesPage() {
   // Form states for Invoice Header
   const [invoiceNo, setInvoiceNo] = useState('');
   const [poNo, setPoNo] = useState('');
+  const [qcId, setQcId] = useState('');
+  const [qcNo, setQcNo] = useState('');
   const [grnNo, setGrnNo] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [freight, setFreight] = useState(0);
@@ -49,73 +54,116 @@ export default function PurchaseInvoicesPage() {
   const farmers = db.farmers;
   const commodities = db.commodities;
 
-  // Filters POs and GRNs for selector
-  const availablePOs = db.purchaseOrders.filter(p => p.status === 'Received' || p.status === 'Partially Received' || p.status === 'Approved');
+  // Filters POs and GRNs for selector (Include Approved, Sent, Partially Received, and Received)
+  const availablePOs = db.purchaseOrders.filter(p => p.status === 'Approved' || p.status === 'Sent' || p.status === 'Partially Received' || p.status === 'Received');
   const availableGRNs = useMemo(() => {
     if (!poNo) return [];
-    const po = db.purchaseOrders.find(p => p.poNo === poNo);
+    const po = db.purchaseOrders.find(p => p.poNo === poNo || p.id === poNo);
     if (!po) return [];
-    return db.grns.filter(g => g.poId === po.id && g.qualityStatus !== 'Pending');
+    return db.grns.filter(g => (g.poId === po.id || g.poNo === po.poNo) && g.qualityStatus !== 'Pending');
   }, [poNo, db.purchaseOrders, db.grns]);
 
-  // Load PO details when PO selection changes
+  // Helper to populate items directly from PO
+  const populateItemsFromPo = (po: PurchaseOrder, selectedGrnNo: string = '') => {
+    const grn = selectedGrnNo ? db.grns.find(g => g.grnNo === selectedGrnNo) : null;
+    const invoiceItems: PurchaseInvoiceItem[] = (po.items || []).map(poItem => {
+      const grnItem = grn?.items?.find(i => i.item === poItem.item || String(i.item) === String(poItem.item));
+      const rate = poItem.rate || 0;
+      const discountAmt = poItem.discount || 0;
+      const commodity = db.commodities.find(c => 
+        c.id === poItem.item || 
+        c._id === poItem.item || 
+        (c.name && poItem.description && c.name.toLowerCase() === poItem.description.toLowerCase()) || 
+        (c.name && typeof poItem.item === 'string' && c.name.toLowerCase() === poItem.item.toLowerCase())
+      );
+
+      let taxRate = 0;
+      if (commodity?.defaultGst !== undefined) {
+        taxRate = Number(commodity.defaultGst);
+      } else if (poItem?.taxPercent !== undefined) {
+        taxRate = Number(poItem.taxPercent);
+      }
+
+      const receivedQty = grnItem ? grnItem.acceptedQuantity : 0;
+      const invoiceQty = grnItem ? grnItem.acceptedQuantity : poItem.quantity;
+      const sub = invoiceQty * rate;
+      const taxVal = Math.round(sub * (taxRate / 100));
+
+      return {
+        item: poItem.item,
+        poQty: poItem.quantity,
+        receivedQty,
+        invoiceQty,
+        rate,
+        discount: discountAmt,
+        taxPercent: taxRate,
+        taxAmount: taxVal,
+        amount: sub + taxVal - discountAmt
+      };
+    });
+
+    setItemsList(invoiceItems);
+    setDueDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
+    setFreight(po.freight || 0);
+    setOtherCharges(po.otherCharges || 0);
+    setDiscount(po.discount || 0);
+  };
+
+  // Load PO details and auto-populate items when PO selection changes
   const handlePoChange = (selectedPoNo: string) => {
     setPoNo(selectedPoNo);
     setGrnNo('');
-    setItemsList([]);
-  };
-
-  // Load GRN items and pre-fill invoice item structures when GRN selection changes
-  const handleGrnChange = (selectedGrnNo: string) => {
-    setGrnNo(selectedGrnNo);
-    const po = db.purchaseOrders.find(p => p.poNo === poNo);
-    const grn = db.grns.find(g => g.grnNo === selectedGrnNo);
-
-    if (po && grn) {
-      const invoiceItems: PurchaseInvoiceItem[] = grn.items.map(grnItem => {
-        const poItem = po.items?.find(i => i.item === grnItem.item || String(i.item) === String(grnItem.item));
-        const rate = poItem ? poItem.rate : 0;
-        const discountAmt = poItem ? poItem.discount : 0;
-        const commodity = db.commodities.find(c => 
-          c.id === grnItem.item || 
-          c._id === grnItem.item || 
-          (c.name && poItem?.description && c.name.toLowerCase() === poItem.description.toLowerCase()) || 
-          (c.name && typeof grnItem.item === 'string' && c.name.toLowerCase() === grnItem.item.toLowerCase())
-        );
-
-        let taxRate = 0;
-        if (commodity?.defaultGst !== undefined) {
-          taxRate = Number(commodity.defaultGst);
-        } else if (poItem?.taxPercent !== undefined) {
-          taxRate = Number(poItem.taxPercent);
-        }
-
-        const sub = grnItem.acceptedQuantity * rate;
-        const taxVal = Math.round(sub * (taxRate / 100));
-
-        return {
-          item: grnItem.item,
-          poQty: poItem ? poItem.quantity : 0,
-          receivedQty: grnItem.acceptedQuantity,
-          invoiceQty: grnItem.acceptedQuantity, // Default to accepted qty
-          rate: rate,
-          discount: discountAmt,
-          taxPercent: taxRate,
-          taxAmount: taxVal,
-          amount: sub + taxVal - discountAmt
-        };
-      });
-
-      setItemsList(invoiceItems);
-      
-      // Auto pre-fill header info
-      setDueDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]); // 30 days due
-      setFreight(po.freight || 0);
-      setDiscount(po.discount || 0);
+    const po = db.purchaseOrders.find(p => p.poNo === selectedPoNo || p.id === selectedPoNo);
+    if (po) {
+      populateItemsFromPo(po, '');
+      const qc = db.qualityInspections.find(q => q.poId === po.id || q.poNo === po.poNo || q.grnNo === `LOT-${po.poNo}`);
+      if (qc) {
+        setQcId(qc.id);
+        setQcNo(qc.qcNo || '');
+      } else {
+        setQcId('');
+        setQcNo('');
+      }
     } else {
       setItemsList([]);
+      setQcId('');
+      setQcNo('');
     }
   };
+
+  // Pre-fill / update invoice item structures when GRN selection changes (if attached)
+  const handleGrnChange = (selectedGrnNo: string) => {
+    setGrnNo(selectedGrnNo);
+    const po = db.purchaseOrders.find(p => p.poNo === poNo || p.id === poNo);
+    if (po) {
+      populateItemsFromPo(po, selectedGrnNo);
+    }
+  };
+
+  // Handle URL query parameters for direct PO/QC-to-Invoice conversion
+  const poQueryParam = searchParams.get('po');
+  const qcQueryParam = searchParams.get('qc');
+  const actionQueryParam = searchParams.get('action');
+  useEffect(() => {
+    if (poQueryParam) {
+      const po = db.purchaseOrders.find(p => p.id === poQueryParam || p.poNo === poQueryParam);
+      if (po) {
+        setPoNo(po.poNo);
+        setGrnNo('');
+        populateItemsFromPo(po, '');
+        if (qcQueryParam) {
+          const qc = db.qualityInspections.find(q => q.id === qcQueryParam || q.qcNo === qcQueryParam);
+          if (qc) {
+            setQcId(qc.id);
+            setQcNo(qc.qcNo || '');
+          }
+        }
+        setIsCreateOpen(true);
+      }
+    } else if (actionQueryParam === 'new') {
+      setIsCreateOpen(true);
+    }
+  }, [poQueryParam, qcQueryParam, actionQueryParam, db.purchaseOrders, db.qualityInspections]);
 
   // Edit quantity or rate inside invoice form
   const handleItemValueChange = (index: number, field: 'invoiceQty' | 'rate' | 'discount' | 'taxPercent', val: number) => {
@@ -146,7 +194,7 @@ export default function PurchaseInvoicesPage() {
     if (!selectedInvoice) return;
     setInvoiceNo(selectedInvoice.invoiceNo);
     setPoNo(selectedInvoice.poNumber);
-    setGrnNo(selectedInvoice.grnNumber);
+    setGrnNo(selectedInvoice.grnNumber || '');
     setDueDate(selectedInvoice.dueDate || '');
     setFreight(selectedInvoice.freight || 0);
     setOtherCharges(selectedInvoice.otherCharges || 0);
@@ -162,7 +210,7 @@ export default function PurchaseInvoicesPage() {
     if (!selectedInvoice) return;
     setInvoiceNo(selectedInvoice.invoiceNo);
     setPoNo(selectedInvoice.poNumber);
-    setGrnNo(selectedInvoice.grnNumber);
+    setGrnNo(selectedInvoice.grnNumber || '');
     setDueDate(selectedInvoice.dueDate || '');
     setFreight(selectedInvoice.freight || 0);
     setOtherCharges(selectedInvoice.otherCharges || 0);
@@ -186,21 +234,21 @@ export default function PurchaseInvoicesPage() {
   // Submit invoice
   const handleCreateInvoice = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!invoiceNo || !poNo || !grnNo || itemsList.length === 0) {
-      showToast('Please fill all mandatory fields and configure items', 'error');
+    if (!invoiceNo || !poNo || itemsList.length === 0) {
+      showToast('Please fill all mandatory fields (Invoice No, PO) and configure items', 'error');
       return;
     }
 
     if (isEditMode && selectedInvoice) {
-      const po = db.purchaseOrders.find(p => p.poNo === poNo);
-      const grn = db.grns.find(g => g.grnNo === grnNo);
-      if (!po || !grn) return;
+      const po = db.purchaseOrders.find(p => p.poNo === poNo || p.id === poNo);
+      const grn = grnNo ? db.grns.find(g => g.grnNo === grnNo) : null;
+      if (!po) return;
 
       const updatedInvoice: PurchaseInvoice = {
         ...selectedInvoice,
         invoiceNo,
-        poNumber: poNo,
-        grnNumber: grnNo,
+        poNumber: po.poNo,
+        grnNumber: grn ? grn.grnNo : (grnNo || undefined),
         dueDate,
         freight: Number(freight),
         otherCharges: Number(otherCharges),
@@ -228,9 +276,9 @@ export default function PurchaseInvoicesPage() {
       return;
     }
 
-    const po = db.purchaseOrders.find(p => p.poNo === poNo);
-    const grn = db.grns.find(g => g.grnNo === grnNo);
-    if (!po || !grn) return;
+    const po = db.purchaseOrders.find(p => p.poNo === poNo || p.id === poNo);
+    const grn = grnNo ? db.grns.find(g => g.grnNo === grnNo) : null;
+    if (!po) return;
 
     const id = `INV-${Date.now()}`;
     const date = new Date().toISOString().split('T')[0];
@@ -249,8 +297,9 @@ export default function PurchaseInvoicesPage() {
       invoiceDate: date,
       supplierId: po.partyId,
       partyType: po.partyType,
-      poNumber: poNo,
-      grnNumber: grnNo,
+      poNumber: po.poNo,
+      qcNumber: qcNo || undefined,
+      grnNumber: grn ? grn.grnNo : (grnNo || undefined),
       dueDate,
       paymentTerms: po.paymentTerms || '30 Days',
       supplierGSTIN,
@@ -270,7 +319,7 @@ export default function PurchaseInvoicesPage() {
       items: itemsList
     };
 
-    // Run 3-Way Match validation immediately
+    // Run Match validation immediately (2-way against PO, or 3-way if GRN attached)
     const checkMatch = erpService.verifyThreeWayMatch(newInvoice);
     newInvoice.status = checkMatch.isMatch ? 'Matched' : 'Mismatch';
     newInvoice.mismatchReason = checkMatch.isMatch ? undefined : checkMatch.details.join('; ');
@@ -373,7 +422,11 @@ export default function PurchaseInvoicesPage() {
     // Update Invoice in ERP DB
     erpService.purchaseInvoices.update(updatedInvoice);
 
-    // Deduct from supplier / farmer accounts payable balance (Business Rule 9)
+    // Deduct from supplier / farmer accounts payable balance (Business Rule 9) & post Financial Voucher
+    const partyName = selectedInvoice.partyType === 'supplier'
+      ? suppliers.find(s => s.id === selectedInvoice.supplierId)?.name || 'Supplier'
+      : farmers.find(f => f.id === selectedInvoice.supplierId)?.name || 'Farmer';
+
     if (selectedInvoice.partyType === 'supplier') {
       const sup = db.suppliers.find(s => s.id === selectedInvoice.supplierId);
       if (sup) {
@@ -388,6 +441,32 @@ export default function PurchaseInvoicesPage() {
       }
     }
 
+    // Automatically post Payment Voucher to Finance Module (/finance/payments, /finance/ledger)
+    erpService.postVoucher({
+      voucherType: 'Payment',
+      date: paymentDate || new Date().toISOString().split('T')[0],
+      referenceNo: selectedInvoice.invoiceNo,
+      partyId: selectedInvoice.supplierId,
+      partyType: selectedInvoice.partyType || 'supplier',
+      amount: paymentAmount,
+      paymentMode: paymentMode as any,
+      cashBankLink: paymentAccount || 'HDFC Bank Oper A/c',
+      debitAccount: `${partyName} Accounts Payable`,
+      creditAccount: paymentAccount || 'HDFC Bank Oper A/c',
+      narration: `Payment settlement for Purchase Invoice ${selectedInvoice.invoiceNo} (PO Ref: ${selectedInvoice.poNumber || 'N/A'})${paymentNotes ? ' - ' + paymentNotes : ''}`
+    }, currentUserRole);
+
+    // Update linked PO payment notes if full settlement
+    if (selectedInvoice.poNumber) {
+      const po = db.purchaseOrders.find(p => p.poNo === selectedInvoice.poNumber);
+      if (po) {
+        if (newRemaining === 0) {
+          po.paymentTerms = `${po.paymentTerms || ''} (Paid: ₹${newPaid.toLocaleString()})`.trim();
+        }
+        erpService.purchaseOrders.update(po);
+      }
+    }
+
     // Refresh, close, and reset
     refreshDb();
     setSelectedInvoice(updatedInvoice);
@@ -395,7 +474,7 @@ export default function PurchaseInvoicesPage() {
     setPaymentAmount(0);
     setPaymentReference('');
     setPaymentNotes('');
-    showToast(`Payment of ₹${paymentAmount.toLocaleString()} recorded successfully!`, 'success');
+    showToast(`Payment of ₹${paymentAmount.toLocaleString()} recorded & posted to Finance Payments & Ledger!`, 'success');
   };
 
   // Verification results
@@ -801,6 +880,16 @@ export default function PurchaseInvoicesPage() {
                   </div>
                 )}
 
+                {!selectedInvoice.grnNumber && (
+                  <button
+                    onClick={() => router.push(`/procurement/grn?action=new&po=${selectedInvoice.poNumber}&invoice=${selectedInvoice.id}`)}
+                    className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/10 cursor-pointer transition"
+                  >
+                    <Truck size={14} />
+                    <span>Record Gate Receipt (GRN - Next Step)</span>
+                  </button>
+                )}
+
                 <button
                   onClick={() => handleDownloadPDF(selectedInvoice)}
                   className="w-full py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-600 font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 cursor-pointer transition"
@@ -860,14 +949,16 @@ export default function PurchaseInvoicesPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Reference Inward GRN *</label>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    Reference Inward GRN <span className="text-[9px] text-slate-400 font-normal lowercase">(optional - links after inward)</span>
+                  </label>
                   <select
                     value={grnNo}
                     onChange={e => handleGrnChange(e.target.value)}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none"
-                    required
+                    disabled={isViewMode}
                   >
-                    <option value="">Select GRN</option>
+                    <option value="">No GRN yet (Awaiting warehouse gate entry)</option>
                     {availableGRNs.map(g => (
                       <option key={g.id} value={g.grnNo}>{g.grnNo} (Accepted: {g.acceptedQty} MT)</option>
                     ))}
@@ -929,7 +1020,11 @@ export default function PurchaseInvoicesPage() {
                             </div>
                             <div className="text-[10px] text-slate-400 font-semibold space-x-2">
                               <span>PO Ordered: {item.poQty}</span>
-                              <span>GRN Passed QC: {item.receivedQty}</span>
+                              {item.receivedQty > 0 ? (
+                                <span className="text-emerald-600">GRN Passed QC: {item.receivedQty}</span>
+                              ) : (
+                                <span className="text-amber-600 font-medium">Awaiting GRN Inward</span>
+                              )}
                             </div>
                           </div>
                           

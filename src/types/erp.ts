@@ -285,6 +285,10 @@ export interface GRN {
   grnNo: string;
   poId: string;
   poNo: string;
+  invoiceId?: string;
+  invoiceNo?: string;
+  qcId?: string;
+  qcNo?: string;
   date: string;
   partyType: 'supplier' | 'farmer';
   partyId: string;
@@ -327,11 +331,24 @@ export interface QualityInspectionItem {
 
 export interface QualityInspection {
   id: string;
-  grnId: string;
-  grnNo: string;
+  qcNo?: string;
+  poId?: string;
+  poNo?: string;
+  grnId?: string;
+  grnNo?: string;
   inspector: string;
   date: string;
   status: 'Pending' | 'Passed' | 'Partially Passed' | 'Rejected';
+  decision?: 'ACCEPT' | 'PARTIAL ACCEPT' | 'REJECT' | 'HOLD';
+  grade?: string;
+  receivedQuantity?: number;
+  acceptedQuantity?: number;
+  rejectedQuantity?: number;
+  holdQuantity?: number;
+  damagedQuantity?: number;
+  basePrice?: number;
+  finalPrice?: number;
+  priceDeduction?: number;
   notes?: string;
   items: QualityInspectionItem[];
   // Backward compatibility:
@@ -339,7 +356,6 @@ export interface QualityInspection {
   batchNo: string;
   quantity: number;
   moisturePercent: number;
-  grade: 'A' | 'B' | 'C' | 'Rejected';
   weight: number;
   color: string;
   foreignMaterialPercent: number;
@@ -368,7 +384,9 @@ export interface PurchaseInvoice {
   supplierId: string; // References Supplier/Farmer id
   partyType: 'supplier' | 'farmer';
   poNumber: string;
-  grnNumber: string;
+  qcId?: string;
+  qcNumber?: string;
+  grnNumber?: string;
   dueDate: string;
   paymentTerms: string;
   supplierGSTIN?: string;

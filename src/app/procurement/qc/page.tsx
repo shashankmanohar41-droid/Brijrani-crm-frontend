@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { useErp } from '../../../context/ErpContext';
 import { erpService, getDb, saveDb } from '../../../services/erpService';
 import api from '../../../services/axios';
@@ -8,7 +9,7 @@ import {
   FlaskConical, ClipboardCheck, CheckCircle2, Clock, 
   Search, ShieldAlert, Award, FileSpreadsheet, UserCheck,
   Warehouse, ArrowRight, PackageCheck, Scale, FileText,
-  History, Settings, BarChart2, Plus, Trash2, Printer, Eye
+  History, Settings, BarChart2, Plus, Trash2, Printer, Eye, FileCheck
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { formatDate } from '../../../utils/dateUtils';
@@ -18,6 +19,8 @@ import {
 } from 'recharts';
 
 export default function QualityControlPage() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const { db, refreshDb, currentUserRole, showToast } = useErp();
   const [activeTab, setActiveTab] = useState<'dashboard' | 'inspections' | 'samples' | 'specs'>('dashboard');
   const [subTab, setSubTab] = useState<'pending' | 'completed'>('pending');
@@ -97,15 +100,52 @@ export default function QualityControlPage() {
       if (samplesRes.data?.success) setSamples(samplesRes.data.data);
 
       const inspectionsRes = await api.get('/procurement/quality-inspections');
-      if (inspectionsRes.data?.success) setInspections(inspectionsRes.data.data);
+      if (inspectionsRes.data?.success && inspectionsRes.data.data?.length > 0) {
+        setInspections(inspectionsRes.data.data);
+      } else {
+        const localQIs = getDb().qualityInspections || [];
+        setInspections(localQIs);
+      }
     } catch (err) {
       console.error('Failed to load quality database records:', err);
+      const localQIs = getDb().qualityInspections || [];
+      setInspections(localQIs);
     }
   };
 
   useEffect(() => {
     loadQcData();
   }, [activeTab, subTab]);
+
+  // Handle ?po= URL query parameter from PO page
+  const poQueryParam = searchParams.get('po');
+  useEffect(() => {
+    if (poQueryParam) {
+      const po = db.purchaseOrders.find(p => p.id === poQueryParam || p.poNo === poQueryParam);
+      if (po) {
+        const lotWeight = (po.items?.[0]?.quantity || 10) * 1000;
+        setInspectGrn({
+          id: po.id,
+          poId: po.id,
+          poNo: po.poNo,
+          grnNo: `LOT-${po.poNo}`,
+          items: po.items || [],
+          grossWeight: lotWeight,
+          tareWeight: 0,
+          vehicleNo: 'PO-CARGO'
+        });
+        setGrossWeight(lotWeight);
+        setTareWeight(0);
+        setNetWeight(lotWeight);
+        setOverallDecision('ACCEPT');
+        setOverallGrade('Grade A');
+        setBasePrice(po.items?.[0]?.rate || 2500);
+        setActiveTab('inspections');
+        setSubTab('pending');
+        setIsInspectionModalOpen(true);
+      }
+    }
+  }, [poQueryParam, db.purchaseOrders]);
 
   // Sync net weight calculations
   useEffect(() => {
@@ -376,12 +416,46 @@ export default function QualityControlPage() {
 
       // Synchronize local DB state immediately
       const currentDb = getDb();
+      if (!currentDb.qualityInspections) currentDb.qualityInspections = [];
+      const newQi = {
+        id: `QC-${Date.now()}`,
+        _id: `QC-${Date.now()}`,
+        qcNo: `QC-${inspectGrn.poNo || inspectGrn.grnNo || Date.now()}`,
+        poId: inspectGrn.poId || inspectGrn.id,
+        poNo: inspectGrn.poNo,
+        grnId: inspectGrn.grnId || grnIdVal,
+        grnNo: inspectGrn.grnNo || `LOT-${inspectGrn.poNo}`,
+        decision: overallDecision,
+        status: overallDecision === 'ACCEPT' ? 'Passed' : overallDecision === 'REJECT' ? 'Rejected' : 'Partially Passed',
+        qualityStatus: overallDecision === 'ACCEPT' ? 'Passed' : overallDecision === 'REJECT' ? 'Rejected' : 'Partially Passed',
+        grade: overallGrade,
+        qualityScore: overallDecision === 'ACCEPT' ? 95 : overallDecision === 'REJECT' ? 40 : 75,
+        receivedQuantity: netWeight,
+        acceptedQuantity: acceptedQty,
+        rejectedQuantity: rejectedQty,
+        holdQuantity: holdQty,
+        damagedQuantity: damagedQty,
+        basePrice,
+        priceDeduction,
+        vehicleNo: inspectGrn.vehicleNo || 'PO-Cargo',
+        notes: inspectRemarks,
+        items: itemsPayload,
+        date: new Date().toISOString()
+      };
+
+      const existingIdx = currentDb.qualityInspections.findIndex((q: any) => q.grnNo === inspectGrn.grnNo || (inspectGrn.poNo && q.poNo === inspectGrn.poNo));
+      if (existingIdx >= 0) {
+        currentDb.qualityInspections[existingIdx] = { ...currentDb.qualityInspections[existingIdx], ...newQi } as any;
+      } else {
+        currentDb.qualityInspections.push(newQi as any);
+      }
+
       const targetGrn = currentDb.grns.find((g: any) => g.id === grnIdVal || g.grnNo === inspectGrn.grnNo);
       if (targetGrn) {
         targetGrn.qualityStatus = overallDecision === 'ACCEPT' ? 'Passed' : overallDecision === 'REJECT' ? 'Rejected' : overallDecision === 'PARTIAL ACCEPT' ? 'Partially Passed' : 'On Hold';
         targetGrn.status = overallDecision === 'ACCEPT' || overallDecision === 'PARTIAL ACCEPT' ? 'Accepted' : overallDecision === 'REJECT' ? 'Rejected' : 'Pending QC';
-        saveDb(currentDb);
       }
+      saveDb(currentDb);
 
       setIsInspectionModalOpen(false);
       setInspectGrn(null);
@@ -487,13 +561,73 @@ export default function QualityControlPage() {
     return db.commodities.find(c => c.id === id || c._id === id)?.name || 'Commodity';
   };
 
-  const pendingGRNs = useMemo(() => {
-    return db.grns.filter(g => 
-      g.qualityStatus === 'Pending' && 
-      (g.grnNo.toLowerCase().includes(searchQuery.toLowerCase()) || 
-       g.poNo.toLowerCase().includes(searchQuery.toLowerCase()))
-    );
-  }, [db.grns, searchQuery]);
+  // Pending items for QC (Approved POs awaiting pre-inward inspection + any arrival GRNs)
+  const pendingInspections = useMemo(() => {
+    // 1. Approved Purchase Orders awaiting QC testing
+    const pendingPOs = db.purchaseOrders
+      .filter(p => p.status === 'Approved' || p.status === 'Partially Received')
+      .filter(p => !inspections.some(qi => qi.poId === p.id || qi.poNo === p.poNo || qi.grnNo === `LOT-${p.poNo}` || qi.grnNo === p.poNo))
+      .filter(p => {
+        if (!searchQuery) return true;
+        const q = searchQuery.toLowerCase();
+        const partyName = p.partyType === 'supplier' 
+          ? db.suppliers.find(s => s.id === p.partyId)?.name || ''
+          : db.farmers.find(f => f.id === p.partyId)?.name || '';
+        return p.poNo.toLowerCase().includes(q) || partyName.toLowerCase().includes(q);
+      })
+      .map(p => {
+        const partyName = p.partyType === 'supplier' 
+          ? db.suppliers.find(s => s.id === p.partyId)?.name || 'Supplier'
+          : db.farmers.find(f => f.id === p.partyId)?.name || 'Farmer';
+        const totalQty = (p.items || []).reduce((s, i) => s + (i.quantity || 0), 0);
+        return {
+          id: p.id,
+          type: 'PO',
+          poId: p.id,
+          poNo: p.poNo,
+          grnNo: `LOT-${p.poNo}`,
+          displayTitle: `${p.poNo}`,
+          subtitle: `PO Source: ${partyName} | Qty: ${totalQty} MT`,
+          partyName,
+          commodityName: getCommodityName(p.items?.[0]?.item),
+          items: p.items || [],
+          totalQty,
+          vehicleNo: 'Pre-Inward PO Cargo',
+          grossWeight: totalQty * 1000,
+          tareWeight: 0,
+          basePrice: p.items?.[0]?.rate || 2500
+        };
+      });
+
+    // 2. Pending arrival GRNs (if any)
+    const pendingArrivalGRNs = db.grns
+      .filter(g => g.qualityStatus === 'Pending')
+      .filter(g => !pendingPOs.some(po => po.poId === g.poId || po.poNo === g.poNo))
+      .filter(g => {
+        if (!searchQuery) return true;
+        const q = searchQuery.toLowerCase();
+        return g.grnNo.toLowerCase().includes(q) || g.poNo.toLowerCase().includes(q);
+      })
+      .map(g => ({
+        id: g.id,
+        type: 'GRN',
+        poId: g.poId,
+        poNo: g.poNo,
+        grnNo: g.grnNo,
+        displayTitle: `${g.grnNo}`,
+        subtitle: `Gate Entry Ref: ${g.poNo} | Vehicle: ${g.vehicleNo}`,
+        partyName: (g as any).supplierName || 'Vendor',
+        commodityName: getCommodityName(g.items?.[0]?.item),
+        items: g.items || [],
+        totalQty: (g.items || []).reduce((s: number, i: any) => s + (i.receivedNow || i.quantity || 0), 0),
+        vehicleNo: g.vehicleNo,
+        grossWeight: (g as any).grossWeight || 30000,
+        tareWeight: (g as any).tareWeight || 10000,
+        basePrice: 2500
+      }));
+
+    return [...pendingPOs, ...pendingArrivalGRNs];
+  }, [db.purchaseOrders, db.grns, db.suppliers, db.farmers, inspections, searchQuery]);
 
   return (
     <div className="space-y-6">
@@ -528,10 +662,11 @@ export default function QualityControlPage() {
             <History size={14} /> Samples ({samples.length})
           </button>
           <button 
-            onClick={() => setActiveTab('specs')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${activeTab === 'specs' ? 'bg-emerald-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+            onClick={() => router.push('/masters?tab=qualitySpecs')}
+            className="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer bg-slate-100 text-slate-600 hover:bg-slate-200"
+            title="Configure specifications in Masters Hub"
           >
-            <Settings size={14} /> Specs Master
+            <Settings size={14} /> Specs Master ↗
           </button>
         </div>
       </div>
@@ -573,8 +708,8 @@ export default function QualityControlPage() {
                 <Clock size={20} />
               </div>
               <div>
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Pending Arrivals</span>
-                <span className="text-xl font-bold text-slate-700">{pendingGRNs.length}</span>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Pending Inspections</span>
+                <span className="text-xl font-bold text-slate-700">{pendingInspections.length}</span>
               </div>
             </div>
           </div>
@@ -586,9 +721,9 @@ export default function QualityControlPage() {
               <span>Critical QC Quality Notifications</span>
             </h3>
             <div className="space-y-2 text-xs">
-              {pendingGRNs.length > 0 ? (
+              {pendingInspections.length > 0 ? (
                 <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg font-medium">
-                  ⚠️ Alert: There are {pendingGRNs.length} arriving vehicles waiting at the gate for sample drawing & weighment validation.
+                  ⚠️ Alert: There are {pendingInspections.length} Purchase Orders / arrivals awaiting quality parameter validation & release certification.
                 </div>
               ) : (
                 <div className="p-3 bg-slate-50 text-slate-500 rounded-lg font-medium">
@@ -704,9 +839,9 @@ export default function QualityControlPage() {
               <div className="flex gap-2">
                 <button 
                   onClick={() => setSubTab('pending')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition ${subTab === 'pending' ? 'bg-amber-50 text-amber-700' : 'text-slate-500'}`}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition ${subTab === 'pending' ? 'bg-pink-50 text-pink-700' : 'text-slate-500'}`}
                 >
-                  Pending Arrivals ({pendingGRNs.length})
+                  Pending QC / POs ({pendingInspections.length})
                 </button>
                 <button 
                   onClick={() => setSubTab('completed')}
@@ -718,8 +853,8 @@ export default function QualityControlPage() {
               <div className="relative">
                 <input 
                   type="text" 
-                  placeholder="Search GRN..." 
-                  className="pl-8 pr-3 py-1.5 border border-slate-200 rounded-lg text-xs w-40"
+                  placeholder="Search PO / GRN..." 
+                  className="pl-8 pr-3 py-1.5 border border-slate-200 rounded-lg text-xs w-44"
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                 />
@@ -730,33 +865,42 @@ export default function QualityControlPage() {
             {/* List */}
             <div className="space-y-2 overflow-y-auto max-h-[400px]">
               {subTab === 'pending' ? (
-                pendingGRNs.length === 0 ? (
-                  <div className="text-center py-8 text-xs text-slate-400">No pending arrivals found.</div>
+                pendingInspections.length === 0 ? (
+                  <div className="text-center py-8 text-xs text-slate-400">No pending Purchase Orders or arrivals awaiting QC.</div>
                 ) : (
-                  pendingGRNs.map((g: any) => (
+                  pendingInspections.map((item: any) => (
                     <div 
-                      key={g.id || g._id}
-                      onClick={() => setSelectedItem(g)}
-                      className={`p-3 border rounded-lg cursor-pointer transition flex justify-between items-center ${selectedItem?.grnNo === g.grnNo ? 'border-amber-500 bg-amber-50/10' : 'border-slate-150 hover:bg-slate-50'}`}
+                      key={item.id || item._id}
+                      onClick={() => setSelectedItem(item)}
+                      className={`p-3 border rounded-lg cursor-pointer transition flex justify-between items-center ${selectedItem?.grnNo === item.grnNo || selectedItem?.poNo === item.poNo ? 'border-pink-500 bg-pink-50/10' : 'border-slate-150 hover:bg-slate-50'}`}
                     >
                       <div>
-                        <div className="font-bold text-xs text-slate-700">{g.grnNo}</div>
-                        <div className="text-[10px] text-slate-500">Vehicle: {g.vehicleNo} | Comm: {getCommodityName(g.items[0]?.item)}</div>
+                        <div className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+                          <span>{item.displayTitle}</span>
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-pink-100 text-pink-700">
+                            {item.type === 'PO' ? 'PO Awaiting QC' : 'Gate Receipt'}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">
+                          {item.subtitle} | Comm: <span className="font-semibold text-slate-700">{item.commodityName}</span>
+                        </div>
                       </div>
                       <button 
                         onClick={(e) => {
                           e.stopPropagation();
-                          setInspectGrn(g);
-                          setGrossWeight(g.grossWeight || 30000);
-                          setTareWeight(g.tareWeight || 10000);
-                          setNetWeight((g.grossWeight || 30000) - (g.tareWeight || 10000));
+                          setInspectGrn(item);
+                          setGrossWeight(item.grossWeight || 30000);
+                          setTareWeight(item.tareWeight || 0);
+                          setNetWeight((item.grossWeight || 30000) - (item.tareWeight || 0));
+                          setBasePrice(item.basePrice || 2500);
                           setOverallDecision('ACCEPT');
                           setOverallGrade('Grade A');
                           setIsInspectionModalOpen(true);
                         }}
-                        className="px-2 py-1 bg-amber-600 text-white rounded text-[10px] font-bold"
+                        className="px-2.5 py-1 bg-pink-600 hover:bg-pink-700 text-white rounded-lg text-xs font-bold shadow-sm cursor-pointer transition flex items-center gap-1"
                       >
-                        Inspect Lot
+                        <Scale size={12} />
+                        <span>Inspect PO Lot</span>
                       </button>
                     </div>
                   ))
@@ -856,6 +1000,16 @@ export default function QualityControlPage() {
                     <span className="font-bold text-slate-700">{selectedItem.grade || 'N/A'}</span>
                   </div>
                 </div>
+
+                {(selectedItem.decision === 'ACCEPT' || selectedItem.qualityStatus === 'Passed' || selectedItem.decision === 'PARTIAL ACCEPT') && (
+                  <button
+                    onClick={() => router.push(`/procurement/invoices?action=new&po=${selectedItem.poId || selectedItem.poNo || selectedItem.grnNo?.replace('LOT-', '')}&qc=${selectedItem._id || selectedItem.id || selectedItem.qcNo}`)}
+                    className="w-full py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-amber-600/10 cursor-pointer transition"
+                  >
+                    <FileCheck size={14} />
+                    <span>Create Purchase Invoice (Step 2 - Next Step)</span>
+                  </button>
+                )}
 
                 {/* Audit Trail list */}
                 {subTab === 'completed' && (
@@ -1012,227 +1166,7 @@ export default function QualityControlPage() {
         </div>
       )}
 
-      {/* SPECS TAB */}
-      {activeTab === 'specs' && (() => {
-        const isAdmin = currentUserRole === 'Admin' || currentUserRole === 'Super Admin';
-        return (
-          <div className="grid grid-cols-12 gap-6 w-full">
-            {isAdmin ? (
-              <div className="col-span-5 bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-4">
-            <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1">
-              <Settings size={18} className="text-emerald-600" />
-              <span>Configure Commodity Specifications</span>
-            </h3>
 
-            <form onSubmit={handleSaveSpec} className="space-y-3">
-              <div>
-                <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Select Commodity *</label>
-                <select 
-                  className="w-full p-2 border border-slate-200 rounded-lg text-xs"
-                  value={selectedCommodityId}
-                  onChange={(e) => setSelectedCommodityId(e.target.value)}
-                  required
-                >
-                  <option value="">-- Choose Commodity --</option>
-                  {db.commodities.map(c => (
-                    <option key={c.id} value={c.id || c._id}>{c.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Parameter Name *</label>
-                <input 
-                  type="text" 
-                  className="w-full p-2 border border-slate-200 rounded text-xs"
-                  placeholder="e.g. Moisture, Foreign Matter"
-                  value={specParamName}
-                  onChange={e => setSpecParamName(e.target.value)}
-                  required
-                />
-                <div className="flex flex-wrap gap-1 mt-1.5">
-                  {[
-                    { name: 'Moisture', type: '<=', max: 12.0, unit: '%' },
-                    { name: 'Foreign Material', type: '<=', max: 1.5, unit: '%' },
-                    { name: 'Broken Grains', type: '<=', max: 3.0, unit: '%' },
-                    { name: 'Damaged Grains', type: '<=', max: 2.0, unit: '%' },
-                    { name: 'Admixture', type: '<=', max: 1.0, unit: '%' }
-                  ].map((p, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => {
-                        setSpecParamName(p.name);
-                        setSpecLimitType(p.type as any);
-                        setSpecMaxLimit(p.max);
-                        setSpecMinLimit('');
-                        setSpecUnit(p.unit);
-                      }}
-                      className="text-[9px] bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200 transition font-medium cursor-pointer"
-                    >
-                      + {p.name} (&le; {p.max}{p.unit})
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Constraint Type *</label>
-                  <select 
-                    className="w-full p-2 border border-slate-200 rounded text-xs"
-                    value={specLimitType}
-                    onChange={(e) => setSpecLimitType(e.target.value as any)}
-                    required
-                  >
-                    <option value="<=">&lt;= Max Allowed</option>
-                    <option value=">=">&gt;= Min Required</option>
-                    <option value="Range">Range Limit</option>
-                    <option value="=">Exact Value</option>
-                    <option value="Text">Text Check</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Unit *</label>
-                  <input 
-                    type="text" 
-                    className="w-full p-2 border border-slate-200 rounded text-xs"
-                    placeholder="e.g. %, mm, Grade"
-                    value={specUnit}
-                    onChange={e => setSpecUnit(e.target.value)}
-                    required
-                  />
-                </div>
-              </div>
-
-              {specLimitType === 'Range' ? (
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Min Value *</label>
-                    <input 
-                      type="number" 
-                      step="any"
-                      className="w-full p-2 border border-slate-200 rounded text-xs"
-                      value={specMinLimit}
-                      onChange={e => setSpecMinLimit(e.target.value !== '' ? Number(e.target.value) : '')}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Max Value *</label>
-                    <input 
-                      type="number" 
-                      step="any"
-                      className="w-full p-2 border border-slate-200 rounded text-xs"
-                      value={specMaxLimit}
-                      onChange={e => setSpecMaxLimit(e.target.value !== '' ? Number(e.target.value) : '')}
-                      required
-                    />
-                  </div>
-                </div>
-              ) : specLimitType === 'Text' || specLimitType === '=' ? (
-                <div>
-                  <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Compare Value *</label>
-                  <input 
-                    type="text" 
-                    className="w-full p-2 border border-slate-200 rounded text-xs"
-                    placeholder="e.g. Bright Yellow, 12"
-                    value={specTextValue}
-                    onChange={e => setSpecTextValue(e.target.value)}
-                    required
-                  />
-                </div>
-              ) : (
-                <div>
-                  <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Limit Boundary *</label>
-                  <input 
-                    type="number" 
-                    step="any"
-                    className="w-full p-2 border border-slate-200 rounded text-xs"
-                    value={specMinLimit || specMaxLimit}
-                    onChange={e => {
-                      setSpecMinLimit(e.target.value !== '' ? Number(e.target.value) : '');
-                      setSpecMaxLimit(e.target.value !== '' ? Number(e.target.value) : '');
-                    }}
-                    required
-                  />
-                </div>
-              )}
-
-              <div className="flex items-center gap-2 pt-2">
-                <input 
-                  type="checkbox" 
-                  id="opt"
-                  checked={specIsOptional}
-                  onChange={e => setSpecIsOptional(e.target.checked)}
-                />
-                <label htmlFor="opt" className="text-xs text-slate-600 font-medium">Flag as Optional Parameter (Trigger WARN instead of FAIL)</label>
-              </div>
-
-              <button 
-                type="submit"
-                className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold cursor-pointer transition text-xs flex justify-center items-center gap-1.5"
-              >
-                <Plus size={14} /> Add Specification Constraint
-              </button>
-            </form>
-          </div>
-        ) : (
-          <div className="col-span-12 bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs font-semibold text-amber-800 flex items-center gap-2 mb-2">
-                🛡️ Only Administrators (Admin / Super Admin) are authorized to configure quality specification limit rules. Laboratory staff can view configured constraints below.
-              </div>
-            )}
-
-            <div className={`${isAdmin ? 'col-span-7' : 'col-span-12'} bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-3`}>
-              <h3 className="text-sm font-bold text-slate-800">Quality Specifications Master Log</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-slate-400 uppercase text-[9px] font-bold">
-                      <th className="py-2">Commodity</th>
-                      <th>Parameter Name</th>
-                      <th>Constraint Limit</th>
-                      <th>Is Optional</th>
-                      {isAdmin && <th className="text-right">Actions</th>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {specs.length === 0 ? (
-                      <tr>
-                        <td colSpan={isAdmin ? 5 : 4} className="text-center py-6 text-slate-400">No commodity constraint limits configured yet.</td>
-                      </tr>
-                    ) : (
-                      specs.map((s: any) => (
-                        <tr key={s._id} className="border-b border-slate-100 hover:bg-slate-50">
-                          <td className="py-2 font-semibold text-slate-700">{getCommodityName(s.commodityId)}</td>
-                          <td className="font-medium text-slate-800">{s.parameterName}</td>
-                          <td>
-                            {s.limitType === 'Range' 
-                              ? `${s.minLimit} - ${s.maxLimit} ${s.unit}` 
-                              : `${s.limitType} ${s.maxLimit || s.minLimit || s.textValue} ${s.unit}`
-                            }
-                          </td>
-                          <td className="text-slate-500 font-semibold">{s.isOptional ? 'Yes (WARN)' : 'No (FAIL)'}</td>
-                          {isAdmin && (
-                            <td className="text-right">
-                              <button 
-                                onClick={() => handleDeleteSpec(s._id)}
-                                className="p-1 hover:bg-rose-50 text-rose-600 rounded transition cursor-pointer"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </td>
-                          )}
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
 
       {/* QC INSPECTION MODAL */}
       {isInspectionModalOpen && inspectGrn && (

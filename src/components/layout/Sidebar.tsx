@@ -51,9 +51,9 @@ export default function Sidebar() {
         { name: 'Purchase Enquiry', href: '/procurement/enquiries' },
         { name: 'Quotations', href: '/procurement/quotations' },
         { name: 'Purchase Orders', href: '/procurement/orders' },
-        { name: 'GRN (Inward Slips)', href: '/procurement/grn' },
         { name: 'Quality Control', href: '/procurement/qc' },
         { name: 'Purchase Invoices', href: '/procurement/invoices' },
+        { name: 'GRN (Inward Slips)', href: '/procurement/grn' },
         { name: 'Purchase Returns', href: '/procurement/returns' },
       ]
     }] : []),
