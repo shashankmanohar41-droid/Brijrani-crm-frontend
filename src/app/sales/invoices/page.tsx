@@ -241,8 +241,21 @@ export default function SalesInvoicesPage() {
     doc.setTextColor(148, 163, 184);
     doc.text("This is an electronically generated tax invoice. No signature is required.", 14, 280);
 
-    doc.save(`invoice_${invoice.invoiceNo.replace(/\//g, '_')}.pdf`);
-    showToast(`Invoice ${invoice.invoiceNo} PDF downloaded successfully!`, 'success');
+    const cleanFileName = `invoice_${(invoice.invoiceNo || 'INV').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+    try {
+      const blob = doc.output('blob');
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', cleanFileName);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      doc.save(cleanFileName);
+    }
+    showToast(`Invoice PDF downloaded (${cleanFileName})`, 'success');
   };
 
   const filteredInvoices = statusFilter === 'All'

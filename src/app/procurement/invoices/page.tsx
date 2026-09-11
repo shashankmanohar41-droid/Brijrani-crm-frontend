@@ -10,7 +10,7 @@ import api from '../../../services/axios';
 import { PurchaseInvoice, PurchaseInvoiceItem, PurchaseOrder, GRN } from '../../../types/erp';
 import { formatDate } from '../../../utils/dateUtils';
 import DataTable from '../../../components/shared/DataTable';
-import { FileText, Plus, Landmark, CheckCircle, AlertTriangle, HelpCircle, Download, FileCheck, ArrowRight, ShieldCheck, Edit3, Wallet, Eye, Trash2, Truck } from 'lucide-react';
+import { FileText, Plus, Landmark, CheckCircle, AlertTriangle, HelpCircle, Download, FileCheck, ArrowRight, ShieldCheck, Edit3, Wallet, Eye, Trash2, Truck, FlaskConical } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import IndianDateInput from '../../../components/shared/IndianDateInput';
 
@@ -45,6 +45,7 @@ export default function PurchaseInvoicesPage() {
   const [otherCharges, setOtherCharges] = useState(0);
   const [discount, setDiscount] = useState(0);
   const [remarks, setRemarks] = useState('');
+  const [qcList, setQcList] = useState<any[]>([]);
 
   // Form items list
   const [itemsList, setItemsList] = useState<PurchaseInvoiceItem[]>([]);
@@ -54,6 +55,13 @@ export default function PurchaseInvoicesPage() {
   const farmers = db.farmers;
   const commodities = db.commodities;
 
+  // Load QC list on mount
+  useEffect(() => {
+    api.get('/quality-control').then(res => {
+      if (res.data?.data) setQcList(res.data.data);
+    }).catch(() => null);
+  }, []);
+
   // Filters POs and GRNs for selector (Include Approved, Sent, Partially Received, and Received)
   const availablePOs = db.purchaseOrders.filter(p => p.status === 'Approved' || p.status === 'Sent' || p.status === 'Partially Received' || p.status === 'Received');
   const availableGRNs = useMemo(() => {
@@ -62,6 +70,63 @@ export default function PurchaseInvoicesPage() {
     if (!po) return [];
     return db.grns.filter(g => (g.poId === po.id || g.poNo === po.poNo) && g.qualityStatus !== 'Pending');
   }, [poNo, db.purchaseOrders, db.grns]);
+
+  // Helper to populate items directly from QC (Auto Quality Rebate Deduction)
+  const populateItemsFromQC = (qc: any) => {
+    if (!qc) return;
+    setQcId(qc._id || qc.id);
+    setQcNo(qc.qcNumber || '');
+    if (qc.poNumber) setPoNo(qc.poNumber);
+    if (qc.grnNumber) setGrnNo(qc.grnNumber);
+
+    const comm = db.commodities.find(c => 
+      (qc.commodityId && (c.id === qc.commodityId || c._id === qc.commodityId)) ||
+      (qc.commodityName && c.name?.toLowerCase() === qc.commodityName?.toLowerCase())
+    ) || db.commodities[0];
+
+    const taxRate = comm?.defaultGst !== undefined ? Number(comm.defaultGst) : 0;
+    const baseRate = Number(qc.baseRate || 0);
+    const rebatePerUnit = Number(qc.totalRebate || 0);
+    const settledRate = Number(qc.finalRate || (baseRate - rebatePerUnit));
+    const invoiceQty = Number(qc.quantity || 0);
+    const sub = invoiceQty * settledRate;
+    const taxVal = Math.round(sub * (taxRate / 100));
+
+    const invoiceItems: PurchaseInvoiceItem[] = [{
+      item: comm?.id || comm?._id || qc.commodityName || 'MAIZE',
+      poQty: invoiceQty,
+      receivedQty: invoiceQty,
+      invoiceQty: invoiceQty,
+      baseRate: baseRate,
+      qualityRebatePerUnit: rebatePerUnit,
+      qualityRebateTotal: Number(qc.totalDeduction || (rebatePerUnit * invoiceQty)),
+      settledRate: settledRate,
+      rate: settledRate,
+      discount: 0,
+      taxPercent: taxRate,
+      taxAmount: taxVal,
+      amount: sub + taxVal
+    }];
+
+    setItemsList(invoiceItems);
+    setDueDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
+    setFreight(0);
+    setOtherCharges(0);
+    setDiscount(0);
+    setRemarks(`Settlement as per Quality Inspection ${qc.qcNumber} (${qc.commodityName || 'Cargo'} - Base: ₹${baseRate}/${qc.unit || 'MT'}, Rebate: -₹${rebatePerUnit}/${qc.unit || 'MT'}, Net Settled: ₹${settledRate}/${qc.unit || 'MT'})`);
+  };
+
+  const handleQcChange = (selectedQcId: string) => {
+    setQcId(selectedQcId);
+    if (!selectedQcId) {
+      setQcNo('');
+      return;
+    }
+    const qc = (qcList || []).find((q: any) => (q._id || q.id) === selectedQcId || q.qcNumber === selectedQcId);
+    if (qc) {
+      populateItemsFromQC(qc);
+    }
+  };
 
   // Helper to populate items directly from PO
   const populateItemsFromPo = (po: PurchaseOrder, selectedGrnNo: string = '') => {
@@ -95,6 +160,10 @@ export default function PurchaseInvoicesPage() {
         receivedQty,
         invoiceQty,
         rate,
+        baseRate: rate,
+        qualityRebatePerUnit: 0,
+        qualityRebateTotal: 0,
+        settledRate: rate,
         discount: discountAmt,
         taxPercent: taxRate,
         taxAmount: taxVal,
@@ -145,37 +214,56 @@ export default function PurchaseInvoicesPage() {
   const qcQueryParam = searchParams.get('qc');
   const actionQueryParam = searchParams.get('action');
   useEffect(() => {
-    if (poQueryParam) {
+    if (qcQueryParam) {
+      api.get(`/quality-control/${qcQueryParam}`).then(res => {
+        if (res.data?.data) {
+          populateItemsFromQC(res.data.data);
+          setIsCreateOpen(true);
+        }
+      }).catch(() => {
+        const found = (qcList || []).find((q: any) => (q._id || q.id) === qcQueryParam || q.qcNumber === qcQueryParam);
+        if (found) {
+          populateItemsFromQC(found);
+          setIsCreateOpen(true);
+        }
+      });
+    } else if (poQueryParam) {
       const po = db.purchaseOrders.find(p => p.id === poQueryParam || p.poNo === poQueryParam);
       if (po) {
         setPoNo(po.poNo);
         setGrnNo('');
         populateItemsFromPo(po, '');
-        if (qcQueryParam) {
-          const qc = db.qualityInspections.find(q => q.id === qcQueryParam || q.qcNo === qcQueryParam);
-          if (qc) {
-            setQcId(qc.id);
-            setQcNo(qc.qcNo || '');
-          }
-        }
         setIsCreateOpen(true);
       }
     } else if (actionQueryParam === 'new') {
       setIsCreateOpen(true);
     }
-  }, [poQueryParam, qcQueryParam, actionQueryParam, db.purchaseOrders, db.qualityInspections]);
+  }, [poQueryParam, qcQueryParam, actionQueryParam, db.purchaseOrders, qcList]);
 
   // Edit quantity or rate inside invoice form
-  const handleItemValueChange = (index: number, field: 'invoiceQty' | 'rate' | 'discount' | 'taxPercent', val: number) => {
+  const handleItemValueChange = (index: number, field: 'invoiceQty' | 'rate' | 'baseRate' | 'qualityRebatePerUnit' | 'settledRate' | 'discount' | 'taxPercent', val: number) => {
     setItemsList(prev => {
       const updated = [...prev];
       const item = { ...updated[index] };
       if (field === 'invoiceQty') item.invoiceQty = val;
       if (field === 'rate') item.rate = val;
+      if (field === 'baseRate') item.baseRate = val;
+      if (field === 'qualityRebatePerUnit') item.qualityRebatePerUnit = val;
+      if (field === 'settledRate') {
+        item.settledRate = val;
+        item.rate = val;
+      }
       if (field === 'discount') item.discount = val;
       if (field === 'taxPercent') item.taxPercent = Math.max(0, val);
 
-      const sub = (item.invoiceQty || 0) * (item.rate || 0);
+      // Auto-recompute rate from baseRate - qualityRebatePerUnit if both are set
+      if (item.baseRate !== undefined && item.qualityRebatePerUnit !== undefined && field !== 'settledRate' && field !== 'rate') {
+        item.settledRate = Math.max(0, item.baseRate - item.qualityRebatePerUnit);
+        item.rate = item.settledRate;
+      }
+
+      item.qualityRebateTotal = (item.qualityRebatePerUnit || 0) * (item.invoiceQty || 0);
+      const sub = (item.invoiceQty || 0) * (item.rate || item.settledRate || 0);
       const taxRate = item.taxPercent !== undefined ? item.taxPercent : 0;
       item.taxAmount = Math.round(sub * (taxRate / 100));
       item.amount = sub + item.taxAmount - (item.discount || 0);
@@ -185,10 +273,18 @@ export default function PurchaseInvoicesPage() {
   };
 
   // Totals calculations
-  const subtotal = itemsList.reduce((sum, i) => sum + (i.invoiceQty * i.rate), 0);
+  const baseSubtotal = itemsList.reduce((sum, i) => sum + ((i.baseRate !== undefined ? i.baseRate : i.rate) * i.invoiceQty), 0);
+  const totalQualityRebateDeduction = itemsList.reduce((sum, i) => sum + (i.qualityRebateTotal || ((i.qualityRebatePerUnit || 0) * i.invoiceQty)), 0);
+  const subtotal = itemsList.reduce((sum, i) => sum + (i.invoiceQty * (i.rate || i.settledRate || 0)), 0);
   const totalTax = itemsList.reduce((sum, i) => sum + i.taxAmount, 0);
   const totalCharges = Number(freight) + Number(otherCharges);
   const grandTotal = subtotal + totalTax + totalCharges - Number(discount);
+
+  // Find active QC record if selected
+  const activeQc = useMemo(() => {
+    if (!qcId && !qcNo) return null;
+    return (qcList || []).find((q: any) => (q._id || q.id) === qcId || q.qcNumber === qcNo);
+  }, [qcId, qcNo, qcList]);
 
   const handleOpenEdit = () => {
     if (!selectedInvoice) return;
@@ -234,20 +330,22 @@ export default function PurchaseInvoicesPage() {
   // Submit invoice
   const handleCreateInvoice = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!invoiceNo || !poNo || itemsList.length === 0) {
-      showToast('Please fill all mandatory fields (Invoice No, PO) and configure items', 'error');
+    if (!invoiceNo || (!poNo && !qcId && !qcNo) || itemsList.length === 0) {
+      showToast('Please fill all mandatory fields (Invoice No, Reference PO / QC) and configure items', 'error');
       return;
     }
 
-    if (isEditMode && selectedInvoice) {
-      const po = db.purchaseOrders.find(p => p.poNo === poNo || p.id === poNo);
-      const grn = grnNo ? db.grns.find(g => g.grnNo === grnNo) : null;
-      if (!po) return;
+    const po = db.purchaseOrders.find(p => p.poNo === poNo || p.id === poNo);
+    const grn = grnNo ? db.grns.find(g => g.grnNo === grnNo) : null;
+    const qc = (qcId || qcNo) ? (qcList || []).find((q: any) => (q._id || q.id) === qcId || q.qcNumber === qcNo) : null;
 
+    if (isEditMode && selectedInvoice) {
       const updatedInvoice: PurchaseInvoice = {
         ...selectedInvoice,
         invoiceNo,
-        poNumber: po.poNo,
+        poNumber: po ? po.poNo : selectedInvoice.poNumber,
+        qcNumber: qc ? qc.qcNumber : (qcNo || selectedInvoice.qcNumber),
+        qcId: qc ? (qc._id || qc.id) : selectedInvoice.qcId,
         grnNumber: grn ? grn.grnNo : (grnNo || undefined),
         dueDate,
         freight: Number(freight),
@@ -255,6 +353,8 @@ export default function PurchaseInvoicesPage() {
         discount: Number(discount),
         remarks,
         subtotal,
+        baseSubtotal,
+        qualityRebateDeduction: totalQualityRebateDeduction,
         grandTotal,
         items: itemsList
       };
@@ -269,6 +369,8 @@ export default function PurchaseInvoicesPage() {
       setIsEditMode(false);
       setInvoiceNo('');
       setPoNo('');
+      setQcId('');
+      setQcNo('');
       setGrnNo('');
       setItemsList([]);
       setSelectedInvoice(updatedInvoice);
@@ -276,37 +378,35 @@ export default function PurchaseInvoicesPage() {
       return;
     }
 
-    const po = db.purchaseOrders.find(p => p.poNo === poNo || p.id === poNo);
-    const grn = grnNo ? db.grns.find(g => g.grnNo === grnNo) : null;
-    if (!po) return;
-
     const id = `INV-${Date.now()}`;
     const date = new Date().toISOString().split('T')[0];
 
-    const partyName = po.partyType === 'supplier'
-      ? suppliers.find(s => s.id === po.partyId)?.name
-      : farmers.find(f => f.id === po.partyId)?.name;
-
-    const supplierGSTIN = po.partyType === 'supplier'
-      ? suppliers.find(s => s.id === po.partyId)?.gstin
+    const partyId = po ? po.partyId : (qc?.partyId || (db.farmers[0]?.id || db.farmers[0]?._id));
+    const partyType = po ? po.partyType : (qc?.partyType || 'farmer');
+    const poNumber = po ? po.poNo : (qc?.poNumber || qc?.referenceNumber || `QC-${qc?.qcNumber || 'DIRECT'}`);
+    const supplierGSTIN = partyType === 'supplier'
+      ? (suppliers.find(s => s.id === partyId || (s as any)._id === partyId)?.gstin || '')
       : '';
 
     const newInvoice: PurchaseInvoice = {
       id,
       invoiceNo,
       invoiceDate: date,
-      supplierId: po.partyId,
-      partyType: po.partyType,
-      poNumber: po.poNo,
-      qcNumber: qcNo || undefined,
+      supplierId: partyId,
+      partyType,
+      poNumber,
+      qcId: qc ? (qc._id || qc.id) : undefined,
+      qcNumber: qc ? qc.qcNumber : (qcNo || undefined),
       grnNumber: grn ? grn.grnNo : (grnNo || undefined),
       dueDate,
-      paymentTerms: po.paymentTerms || '30 Days',
+      paymentTerms: po?.paymentTerms || '30 Days',
       supplierGSTIN,
-      billingAddress: po.billingAddress || 'Patna Silos Facility',
-      shippingAddress: po.shippingAddress || 'Patna Silos Facility',
+      billingAddress: po?.billingAddress || 'Patna Silos Facility',
+      shippingAddress: po?.shippingAddress || 'Patna Silos Facility',
       taxType: 'GST',
       subtotal,
+      baseSubtotal,
+      qualityRebateDeduction: totalQualityRebateDeduction,
       discount,
       cgst: Math.round(totalTax / 2),
       sgst: Math.round(totalTax / 2),
@@ -315,24 +415,31 @@ export default function PurchaseInvoicesPage() {
       otherCharges: Number(otherCharges),
       roundOff: 0,
       grandTotal,
-      status: 'Pending Verification',
-      items: itemsList
+      status: 'Matched',
+      items: itemsList,
+      remarks
     };
 
-    // Run Match validation immediately (2-way against PO, or 3-way if GRN attached)
+    // Run Match validation immediately
     const checkMatch = erpService.verifyThreeWayMatch(newInvoice);
-    newInvoice.status = checkMatch.isMatch ? 'Matched' : 'Mismatch';
-    newInvoice.mismatchReason = checkMatch.isMatch ? undefined : checkMatch.details.join('; ');
+    if (!checkMatch.isMatch && po) {
+      newInvoice.status = 'Mismatch';
+      newInvoice.mismatchReason = checkMatch.details.join('; ');
+    } else {
+      newInvoice.status = 'Matched';
+    }
 
     erpService.purchaseInvoices.create(newInvoice);
     refreshDb();
     setIsCreateOpen(false);
     setInvoiceNo('');
     setPoNo('');
+    setQcId('');
+    setQcNo('');
     setGrnNo('');
     setItemsList([]);
     setSelectedInvoice(newInvoice);
-    showToast(`Invoice ${invoiceNo} logged as ${newInvoice.status}!`, 'success');
+    showToast(`Invoice ${invoiceNo} logged as ${newInvoice.status} according to QC settlement!`, 'success');
   };
 
   // Accountant Actions
@@ -500,8 +607,33 @@ export default function PurchaseInvoicesPage() {
         return farmers.find(f => f.id === row.supplierId)?.name || 'Unknown';
       }
     },
-    { header: 'PO Ref', accessor: 'poNumber' as keyof PurchaseInvoice },
+    { 
+      header: 'PO / QC Ref', 
+      accessor: (row: PurchaseInvoice) => (
+        <div className="flex flex-col gap-0.5">
+          <span className="font-mono text-xs font-semibold text-slate-700">{row.poNumber || '-'}</span>
+          {row.qcNumber && (
+            <span className="inline-flex items-center gap-1 font-mono text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 py-0.2 rounded w-fit">
+              <FlaskConical size={9} /> {row.qcNumber}
+            </span>
+          )}
+        </div>
+      )
+    },
     { header: 'GRN Ref', accessor: 'grnNumber' as keyof PurchaseInvoice },
+    { 
+      header: 'QC Rebate Deduction', 
+      accessor: (row: PurchaseInvoice) => (
+        row.qualityRebateDeduction && row.qualityRebateDeduction > 0 ? (
+          <div className="flex flex-col">
+            <span className="font-extrabold text-xs text-rose-600">-₹{row.qualityRebateDeduction.toLocaleString()}</span>
+            <span className="text-[9px] text-slate-400 font-semibold">Quality rebate</span>
+          </div>
+        ) : (
+          <span className="text-slate-400 text-xs">₹0</span>
+        )
+      )
+    },
     { header: 'Grand Total', accessor: (row: PurchaseInvoice) => `₹${(row.grandTotal ?? 0).toLocaleString()}` },
     { header: 'Due Date', accessor: 'dueDate' as keyof PurchaseInvoice },
     { 
@@ -542,32 +674,33 @@ export default function PurchaseInvoicesPage() {
     doc.text(`Invoice No:     ${invoice.invoiceNo}`, 14, 46);
     doc.text(`Invoice Date:   ${formatDate(invoice.invoiceDate)}`, 14, 52);
     doc.text(`Due Date:       ${formatDate(invoice.dueDate)}`, 14, 58);
-    doc.text(`PO Number:      ${invoice.poNumber}`, 14, 64);
-    doc.text(`GRN Number:     ${invoice.grnNumber}`, 14, 70);
-    doc.text(`Match Status:   ${invoice.status}`, 14, 76);
+    doc.text(`PO Number:      ${invoice.poNumber || 'N/A'}`, 14, 64);
+    doc.text(`QC Slip Ref:    ${invoice.qcNumber || 'N/A (Direct PO)'}`, 14, 70);
+    doc.text(`GRN Number:     ${invoice.grnNumber || 'N/A'}`, 14, 76);
+    doc.text(`Match Status:   ${invoice.status}`, 14, 82);
 
     const supName = invoice.partyType === 'supplier'
       ? suppliers.find(s => s.id === invoice.supplierId)?.name
       : farmers.find(f => f.id === invoice.supplierId)?.name;
 
     doc.setFont("Helvetica", "bold");
-    doc.text("SUPPLIER / SOURCING PARTY:", 14, 88);
+    doc.text("SUPPLIER / SOURCING PARTY:", 14, 94);
     doc.setFont("Helvetica", "normal");
-    doc.text(supName || 'Unknown Vendor', 14, 94);
-    doc.text(`GSTIN: ${invoice.supplierGSTIN || 'N/A'}`, 14, 100);
+    doc.text(supName || 'Unknown Vendor', 14, 100);
+    doc.text(`GSTIN: ${invoice.supplierGSTIN || 'N/A'}`, 14, 106);
 
     // Items table header
-    const tableTop = 112;
+    const tableTop = 118;
     doc.setFillColor(248, 250, 252);
     doc.rect(14, tableTop, 182, 8, "F");
 
     doc.setFont("Helvetica", "bold");
     doc.setFontSize(8);
     doc.text("Item Details", 16, tableTop + 5.5);
-    doc.text("PO Qty", 90, tableTop + 5.5, { align: "right" });
-    doc.text("GRN Qty", 115, tableTop + 5.5, { align: "right" });
-    doc.text("Billed Qty", 140, tableTop + 5.5, { align: "right" });
-    doc.text("Billed Rate", 165, tableTop + 5.5, { align: "right" });
+    doc.text("Billed Qty", 85, tableTop + 5.5, { align: "right" });
+    doc.text("Base Rate", 110, tableTop + 5.5, { align: "right" });
+    doc.text("QC Rebate", 135, tableTop + 5.5, { align: "right" });
+    doc.text("Settled Rate", 165, tableTop + 5.5, { align: "right" });
     doc.text("Line Total", 194, tableTop + 5.5, { align: "right" });
 
     doc.setDrawColor(226, 232, 240);
@@ -575,22 +708,40 @@ export default function PurchaseInvoicesPage() {
 
     let itemY = tableTop + 14;
     invoice.items.forEach(it => {
-      const commName = commodities.find(c => c.id === it.item)?.name || it.item;
+      const commName = commodities.find(c => c.id === it.item || c._id === it.item)?.name || it.item;
+      const baseR = it.baseRate !== undefined ? it.baseRate : it.rate;
+      const rebateR = it.qualityRebatePerUnit || 0;
+      const settledR = it.settledRate || it.rate;
+
       doc.setFont("Helvetica", "bold");
       doc.text(commName, 16, itemY);
       doc.setFont("Helvetica", "normal");
-      doc.text(`${it.poQty}`, 90, itemY, { align: "right" });
-      doc.text(`${it.receivedQty}`, 115, itemY, { align: "right" });
-      doc.text(`${it.invoiceQty}`, 140, itemY, { align: "right" });
-      doc.text(`₹${it.rate.toLocaleString()}`, 165, itemY, { align: "right" });
+      doc.text(`${it.invoiceQty}`, 85, itemY, { align: "right" });
+      doc.text(`₹${baseR.toLocaleString()}`, 110, itemY, { align: "right" });
+      doc.text(rebateR > 0 ? `-₹${rebateR.toLocaleString()}` : "₹0", 135, itemY, { align: "right" });
+      doc.text(`₹${settledR.toLocaleString()}`, 165, itemY, { align: "right" });
       doc.text(`₹${it.amount.toLocaleString()}`, 194, itemY, { align: "right" });
       itemY += 8;
     });
 
     doc.line(14, itemY - 3, 196, itemY - 3);
 
-    const summaryX = 135;
-    doc.text("Subtotal:", summaryX, itemY + 2);
+    const summaryX = 130;
+    if (invoice.baseSubtotal) {
+      doc.text("Gross Base Subtotal:", summaryX, itemY + 2);
+      doc.text(`₹${invoice.baseSubtotal.toLocaleString()}`, 194, itemY + 2, { align: "right" });
+      itemY += 6;
+    }
+
+    if (invoice.qualityRebateDeduction && invoice.qualityRebateDeduction > 0) {
+      doc.setTextColor(225, 29, 72);
+      doc.text("QC Rebate Deduction:", summaryX, itemY + 2);
+      doc.text(`-₹${invoice.qualityRebateDeduction.toLocaleString()}`, 194, itemY + 2, { align: "right" });
+      doc.setTextColor(71, 85, 105);
+      itemY += 6;
+    }
+
+    doc.text("Net Taxable Subtotal:", summaryX, itemY + 2);
     doc.text(`₹${invoice.subtotal.toLocaleString()}`, 194, itemY + 2, { align: "right" });
     
     doc.text("Freight charges:", summaryX, itemY + 8);
@@ -605,8 +756,21 @@ export default function PurchaseInvoicesPage() {
     doc.text("Grand Total Pay:", summaryX, itemY + 23);
     doc.text(`₹${invoice.grandTotal.toLocaleString()}`, 194, itemY + 23, { align: "right" });
 
-    doc.save(`purchase_invoice_${invoice.invoiceNo}.pdf`);
-    showToast(`Invoice PDF Voucher downloaded.`, 'success');
+    const cleanFileName = `purchase_invoice_${(invoice.invoiceNo || 'voucher').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+    try {
+      const blob = doc.output('blob');
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', cleanFileName);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      doc.save(cleanFileName);
+    }
+    showToast(`Invoice PDF Voucher downloaded (${cleanFileName})`, 'success');
   };
 
   if (!['Super Admin', 'Purchase Manager', 'Accountant'].includes(currentUserRole)) {
@@ -624,14 +788,16 @@ export default function PurchaseInvoicesPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-800">Purchase Invoices (3-Way Matching)</h1>
-          <p className="text-xs font-medium text-slate-400">Log supplier invoices, run 3-way match audits (PO vs GRN vs Invoice), and verify accounts payable.</p>
+          <h1 className="text-xl font-bold tracking-tight text-slate-800">Purchase Invoices (3-Way Matching & QC Settlement)</h1>
+          <p className="text-xs font-medium text-slate-400">Log supplier invoices according to laboratory QC inspection slips, deduct quality rebates, and run 3-way match audits.</p>
         </div>
         <button
           onClick={() => {
             setItemsList([]);
             setInvoiceNo('');
             setPoNo('');
+            setQcId('');
+            setQcNo('');
             setGrnNo('');
             setDueDate('');
             setFreight(0);
@@ -707,7 +873,7 @@ export default function PurchaseInvoicesPage() {
                     {verificationResult.isMatch ? (
                       <>
                         <ShieldCheck size={15} className="text-emerald-600 animate-pulse" />
-                        <span>3-Way Match Verification Passed</span>
+                        <span>3-Way Match & QC Verification Passed</span>
                       </>
                     ) : (
                       <>
@@ -727,6 +893,33 @@ export default function PurchaseInvoicesPage() {
                 </div>
               )}
 
+              {/* QC Rebate Summary Banner if present */}
+              {(selectedInvoice.qualityRebateDeduction && selectedInvoice.qualityRebateDeduction > 0) || selectedInvoice.qcNumber ? (
+                <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3.5 space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 font-extrabold text-amber-900">
+                      <FlaskConical size={14} className="text-amber-600" />
+                      <span>QC Laboratory Settlement</span>
+                    </div>
+                    {selectedInvoice.qcNumber && (
+                      <span className="font-mono text-[10px] font-bold text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded border border-amber-300">
+                        {selectedInvoice.qcNumber}
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[10px] font-semibold text-slate-600 pt-1 border-t border-amber-200/60">
+                    <div>
+                      <span className="text-slate-400 block">Gross Base Value</span>
+                      <span className="text-slate-800 font-bold">₹{(selectedInvoice.baseSubtotal || selectedInvoice.subtotal).toLocaleString()}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-slate-400 block">Quality Rebate Deduction</span>
+                      <span className="text-rose-600 font-extrabold">-₹{(selectedInvoice.qualityRebateDeduction || 0).toLocaleString()}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
               {/* Header Info */}
               <div className="space-y-2 text-xs font-semibold text-slate-600 border-b border-slate-100 pb-3.5">
                 <div className="flex justify-between">
@@ -739,11 +932,17 @@ export default function PurchaseInvoicesPage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">PO Link:</span>
-                  <span className="font-mono text-[10px] bg-slate-100 px-1 py-0.2 rounded font-bold">{selectedInvoice.poNumber}</span>
+                  <span className="font-mono text-[10px] bg-slate-100 px-1 py-0.2 rounded font-bold">{selectedInvoice.poNumber || 'N/A'}</span>
                 </div>
+                {selectedInvoice.qcNumber && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">QC Inspection Slip:</span>
+                    <span className="font-mono text-[10px] bg-amber-50 text-amber-800 border border-amber-200 px-1.5 py-0.2 rounded font-bold">{selectedInvoice.qcNumber}</span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span className="text-slate-400">GRN Link:</span>
-                  <span className="font-mono text-[10px] bg-slate-100 px-1 py-0.2 rounded font-bold">{selectedInvoice.grnNumber}</span>
+                  <span className="font-mono text-[10px] bg-slate-100 px-1 py-0.2 rounded font-bold">{selectedInvoice.grnNumber || 'N/A'}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Due Date:</span>
@@ -758,20 +957,32 @@ export default function PurchaseInvoicesPage() {
               {/* Items Table */}
               <div className="border border-slate-150 rounded-xl p-4 bg-slate-50/50 space-y-3">
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Billed Invoice Items</span>
-                <div className="space-y-3 max-h-[140px] overflow-y-auto pr-1">
-                  {selectedInvoice.items.map((item, idx) => (
-                    <div key={idx} className="text-xs border-b border-slate-100 pb-2 last:border-0 last:pb-0 space-y-1">
-                      <div className="flex justify-between font-bold text-slate-800">
-                        <span>{commodities.find(c => c.id === item.item)?.name || item.item}</span>
-                        <span>₹{(item.rate ?? 0).toLocaleString()} / Unit</span>
+                <div className="space-y-3 max-h-[160px] overflow-y-auto pr-1">
+                  {selectedInvoice.items.map((item, idx) => {
+                    const baseRate = item.baseRate !== undefined ? item.baseRate : item.rate;
+                    const rebate = item.qualityRebatePerUnit || 0;
+                    const settledRate = item.settledRate || item.rate;
+                    return (
+                      <div key={idx} className="text-xs border-b border-slate-100 pb-2 last:border-0 last:pb-0 space-y-1">
+                        <div className="flex justify-between font-bold text-slate-800">
+                          <span>{commodities.find(c => c.id === item.item || c._id === item.item)?.name || item.item}</span>
+                          <span>₹{settledRate.toLocaleString()} / Unit</span>
+                        </div>
+                        {rebate > 0 && (
+                          <div className="flex items-center gap-1.5 text-[9px] font-semibold text-slate-500">
+                            <span>Base: ₹{baseRate}</span>
+                            <span className="text-rose-600 font-bold">- Rebate: ₹{rebate}/MT</span>
+                            <span className="text-emerald-700 font-bold">= Net: ₹{settledRate}/MT</span>
+                          </div>
+                        )}
+                        <div className="grid grid-cols-3 text-[10px] font-semibold text-slate-500 leading-tight">
+                          <span>PO Ordered: {item.poQty}</span>
+                          <span>GRN Accepted: {item.receivedQty}</span>
+                          <span className="text-primary-600">Billed: {item.invoiceQty}</span>
+                        </div>
                       </div>
-                      <div className="grid grid-cols-3 text-[10px] font-semibold text-slate-500 leading-tight">
-                        <span>PO Ordered: {item.poQty}</span>
-                        <span>GRN Accepted: {item.receivedQty}</span>
-                        <span className="text-primary-600">Billed: {item.invoiceQty}</span>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 <div className="border-t border-slate-100 pt-2 flex justify-between items-center font-bold text-xs text-slate-800">
                   <span>Grand Total Pay:</span>
@@ -914,16 +1125,16 @@ export default function PurchaseInvoicesPage() {
           <div className="w-full max-w-2xl bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden animate-zoom-in">
             <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
               <div>
-                <h3 className="text-sm font-semibold text-slate-800">{isEditMode ? `Edit Supplier Invoice: ${selectedInvoice?.invoiceNo}` : isViewMode ? `View Supplier Invoice: ${selectedInvoice?.invoiceNo}` : 'Process Supplier Billing Invoice'}</h3>
-                <p className="text-[10px] text-slate-400 mt-0.5">{isEditMode ? 'Modify billing parameters received from supplier invoice.' : isViewMode ? 'Detailed view of the billing invoice.' : 'Input billing parameters received from supplier invoice to run 3-way match validation.'}</p>
+                <h3 className="text-sm font-semibold text-slate-800">{isEditMode ? `Edit Supplier Invoice: ${selectedInvoice?.invoiceNo}` : isViewMode ? `View Supplier Invoice: ${selectedInvoice?.invoiceNo}` : 'Process Supplier Billing Invoice (According to QC)'}</h3>
+                <p className="text-[10px] text-slate-400 mt-0.5">{isEditMode ? 'Modify billing parameters received from supplier invoice.' : isViewMode ? 'Detailed view of the billing invoice.' : 'Select QC inspection slip or PO to auto-populate lab quality rebates and settle accounts payable.'}</p>
               </div>
               <button onClick={() => { setIsCreateOpen(false); setIsEditMode(false); setIsViewMode(false); }} className="text-slate-400 hover:text-slate-600 font-bold">&times;</button>
             </div>
 
             <form onSubmit={handleCreateInvoice} className="p-6 space-y-4 max-h-[78vh] overflow-y-auto">
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Supplier Invoice Number *</label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="col-span-2 sm:col-span-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Supplier Invoice No *</label>
                   <input
                     type="text"
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none"
@@ -934,13 +1145,33 @@ export default function PurchaseInvoicesPage() {
                     disabled={isViewMode}
                   />
                 </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Reference Purchase Order (PO) *</label>
+
+                <div className="col-span-2 sm:col-span-1">
+                  <label className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block mb-1 flex items-center gap-1">
+                    <FlaskConical size={11} /> QC Inspection Slip
+                  </label>
+                  <select
+                    value={qcId}
+                    onChange={e => handleQcChange(e.target.value)}
+                    className="w-full px-3 py-2 border border-emerald-300 bg-emerald-50/20 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none"
+                    disabled={isViewMode}
+                  >
+                    <option value="">Direct / Select QC</option>
+                    {qcList.map((q: any) => (
+                      <option key={q._id || q.id} value={q._id || q.id}>
+                        {q.qcNumber} - {q.commodityName || 'Cargo'} ({q.quantity} {q.unit || 'MT'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="col-span-2 sm:col-span-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Purchase Order (PO)</label>
                   <select
                     value={poNo}
                     onChange={e => handlePoChange(e.target.value)}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none"
-                    required
+                    disabled={isViewMode}
                   >
                     <option value="">Select PO</option>
                     {availablePOs.map(po => (
@@ -948,9 +1179,10 @@ export default function PurchaseInvoicesPage() {
                     ))}
                   </select>
                 </div>
-                <div>
+
+                <div className="col-span-2 sm:col-span-1">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                    Reference Inward GRN <span className="text-[9px] text-slate-400 font-normal lowercase">(optional - links after inward)</span>
+                    Inward GRN <span className="text-[9px] text-slate-400 font-normal lowercase">(optional)</span>
                   </label>
                   <select
                     value={grnNo}
@@ -958,13 +1190,39 @@ export default function PurchaseInvoicesPage() {
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none"
                     disabled={isViewMode}
                   >
-                    <option value="">No GRN yet (Awaiting warehouse gate entry)</option>
+                    <option value="">No GRN link</option>
                     {availableGRNs.map(g => (
                       <option key={g.id} value={g.grnNo}>{g.grnNo} (Accepted: {g.acceptedQty} MT)</option>
                     ))}
                   </select>
                 </div>
               </div>
+
+              {/* Active QC Banner */}
+              {(qcId || qcNo || activeQc) && (
+                <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-amber-50 border border-emerald-200 rounded-xl p-3.5 flex items-center justify-between text-xs animate-fade-in shadow-xs">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold shadow-xs">
+                      <FlaskConical size={16} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-extrabold text-slate-800">Quality Inspection Slip: {qcNo || activeQc?.qcNumber}</span>
+                        <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                          QC Settle Applied
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Commodity: <strong className="text-slate-700">{activeQc?.commodityName || itemsList[0]?.item || 'Grain'}</strong> | Base: <strong className="text-slate-700">₹{itemsList[0]?.baseRate || activeQc?.baseRate || 0}/MT</strong> | QC Rebate: <strong className="text-rose-600">-₹{itemsList[0]?.qualityRebatePerUnit || activeQc?.totalRebate || 0}/MT</strong> | Net Settled Rate: <strong className="text-emerald-700 font-bold">₹{itemsList[0]?.settledRate || itemsList[0]?.rate || 0}/MT</strong>
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block">Total Quality Deduction</span>
+                    <span className="text-sm font-extrabold text-rose-600">-₹{totalQualityRebateDeduction.toLocaleString()}</span>
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
@@ -983,6 +1241,7 @@ export default function PurchaseInvoicesPage() {
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none"
                     value={freight || ''}
                     onChange={e => setFreight(Number(e.target.value))}
+                    disabled={isViewMode}
                   />
                 </div>
                 <div>
@@ -992,6 +1251,7 @@ export default function PurchaseInvoicesPage() {
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none"
                     value={otherCharges || ''}
                     onChange={e => setOtherCharges(Number(e.target.value))}
+                    disabled={isViewMode}
                   />
                 </div>
               </div>
@@ -999,12 +1259,14 @@ export default function PurchaseInvoicesPage() {
               {/* Items grid */}
               {itemsList.length > 0 && (
                 <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 space-y-3">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase block tracking-wider">Configure billed quantities & unit rates</span>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase block tracking-wider">Configure billed quantities & unit rates (Acc. to QC)</span>
                   
                   <div className="space-y-3 font-semibold text-xs text-slate-700">
                     {itemsList.map((item, idx) => {
                       const comm = commodities.find(c => c.id === item.item || c._id === item.item || c.name.toLowerCase() === (item.item || '').toLowerCase());
-                      const baseSub = (item.invoiceQty || 0) * (item.rate || 0);
+                      const baseSub = (item.invoiceQty || 0) * (item.rate || item.settledRate || 0);
+                      const hasQcRebate = item.qualityRebatePerUnit !== undefined && item.qualityRebatePerUnit > 0;
+
                       return (
                         <div key={idx} className="bg-white p-3.5 border border-slate-100 rounded-lg space-y-3 shadow-xs">
                           <div className="flex justify-between items-center font-bold text-slate-800">
@@ -1017,11 +1279,16 @@ export default function PurchaseInvoicesPage() {
                               }`}>
                                 Base GST: {item.taxPercent || 0}%
                               </span>
+                              {hasQcRebate && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                  QC Rebate: -₹{item.qualityRebatePerUnit}/MT
+                                </span>
+                              )}
                             </div>
                             <div className="text-[10px] text-slate-400 font-semibold space-x-2">
-                              <span>PO Ordered: {item.poQty}</span>
+                              <span>PO Ordered: {item.poQty} MT</span>
                               {item.receivedQty > 0 ? (
-                                <span className="text-emerald-600">GRN Passed QC: {item.receivedQty}</span>
+                                <span className="text-emerald-600">QC Passed: {item.receivedQty} MT</span>
                               ) : (
                                 <span className="text-amber-600 font-medium">Awaiting GRN Inward</span>
                               )}
@@ -1029,40 +1296,53 @@ export default function PurchaseInvoicesPage() {
                           </div>
                           
                           <div className="grid grid-cols-12 gap-3 items-end">
-                            <div className="col-span-4">
-                              <label className="text-[9px] font-bold text-slate-400 block mb-0.5">Billed quantity *</label>
+                            <div className="col-span-3">
+                              <label className="text-[9px] font-bold text-slate-400 block mb-0.5">Billed Qty (MT) *</label>
                               <input
                                 type="number"
                                 className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold"
                                 value={item.invoiceQty || ''}
                                 onChange={e => handleItemValueChange(idx, 'invoiceQty', Number(e.target.value))}
                                 required
-                              />
-                            </div>
-                            <div className="col-span-3">
-                              <label className="text-[9px] font-bold text-slate-400 block mb-0.5">Billed rate (₹) *</label>
-                              <input
-                                type="number"
-                                className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold"
-                                value={item.rate || ''}
-                                onChange={e => handleItemValueChange(idx, 'rate', Number(e.target.value))}
-                                required
+                                disabled={isViewMode}
                               />
                             </div>
                             <div className="col-span-2">
-                              <label className="text-[9px] font-bold text-slate-400 block mb-0.5">GST Rate (%)</label>
+                              <label className="text-[9px] font-bold text-slate-400 block mb-0.5">Base Rate (₹) *</label>
                               <input
                                 type="number"
                                 className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold"
-                                value={item.taxPercent !== undefined ? item.taxPercent : 0}
-                                onChange={e => handleItemValueChange(idx, 'taxPercent', Number(e.target.value))}
+                                value={item.baseRate !== undefined ? item.baseRate : item.rate || ''}
+                                onChange={e => handleItemValueChange(idx, 'baseRate', Number(e.target.value))}
+                                required
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <div className="col-span-2">
+                              <label className="text-[9px] font-bold text-rose-500 block mb-0.5">QC Rebate (-₹)</label>
+                              <input
+                                type="number"
+                                className="w-full px-2 py-1.5 border border-rose-200 bg-rose-50/20 text-rose-700 rounded-lg text-xs font-semibold"
+                                value={item.qualityRebatePerUnit !== undefined ? item.qualityRebatePerUnit : 0}
+                                onChange={e => handleItemValueChange(idx, 'qualityRebatePerUnit', Number(e.target.value))}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <div className="col-span-2">
+                              <label className="text-[9px] font-bold text-emerald-600 block mb-0.5">Net Rate (₹)</label>
+                              <input
+                                type="number"
+                                className="w-full px-2 py-1.5 border border-emerald-200 bg-emerald-50/30 text-emerald-800 rounded-lg text-xs font-bold"
+                                value={item.settledRate !== undefined ? item.settledRate : item.rate || ''}
+                                onChange={e => handleItemValueChange(idx, 'settledRate', Number(e.target.value))}
+                                disabled={isViewMode}
                               />
                             </div>
                             <div className="col-span-3 text-right">
-                              <span className="text-[8px] font-bold text-slate-400 block mb-0.5">Subtotal (with GST)</span>
+                              <span className="text-[8px] font-bold text-slate-400 block mb-0.5">Settled Line Total</span>
                               <span className="font-extrabold text-slate-800 block text-xs">₹{(item.amount ?? 0).toLocaleString()}</span>
-                              {item.taxAmount > 0 && (
-                                <span className="text-[9px] text-slate-400 font-medium">(Base: ₹{baseSub.toLocaleString()} + Tax: ₹{item.taxAmount.toLocaleString()})</span>
+                              {hasQcRebate && (
+                                <span className="text-[9px] text-rose-600 font-medium block">(-₹{(item.qualityRebateTotal || (item.qualityRebatePerUnit! * item.invoiceQty)).toLocaleString()} QC cut)</span>
                               )}
                             </div>
                           </div>
@@ -1076,13 +1356,20 @@ export default function PurchaseInvoicesPage() {
               {/* Order total preview */}
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 flex justify-between items-center text-xs font-semibold">
                 <div>
-                  <span className="text-[10px] text-slate-400 uppercase block tracking-wider font-bold">Billed Grand Total</span>
-                  <span className="text-sm font-bold text-slate-800">₹{grandTotal.toLocaleString()}</span>
+                  <span className="text-[10px] text-slate-400 uppercase block tracking-wider font-bold">Billed Grand Total Payable</span>
+                  <span className="text-sm font-bold text-emerald-700">₹{grandTotal.toLocaleString()}</span>
+                  {totalQualityRebateDeduction > 0 && (
+                    <span className="text-[10px] text-rose-600 font-bold block mt-0.5">
+                      QC Lab Quality Rebate: -₹{totalQualityRebateDeduction.toLocaleString()}
+                    </span>
+                  )}
                 </div>
-                <div className="text-right text-[10px] text-slate-400 leading-normal font-semibold">
-                  <span>Base Items: ₹{subtotal.toLocaleString()}</span> <br />
-                  <span>Freight Transport: ₹{totalCharges.toLocaleString()}</span> <br />
-                  <span>GST Taxes ({itemsList.length > 0 ? Array.from(new Set(itemsList.map(i => i.taxPercent))).map(t => `${t}%`).join(', ') : '5%'}): ₹{totalTax.toLocaleString()}</span>
+                <div className="text-right text-[10px] text-slate-500 leading-normal font-semibold">
+                  <span>Gross Base Value: ₹{baseSubtotal.toLocaleString()}</span> <br />
+                  <span className="text-rose-600">QC Deduction: -₹{totalQualityRebateDeduction.toLocaleString()}</span> <br />
+                  <span>Net Settled Subtotal: ₹{subtotal.toLocaleString()}</span> <br />
+                  <span>Freight Charges: ₹{totalCharges.toLocaleString()}</span> <br />
+                  <span>GST Taxes: ₹{totalTax.toLocaleString()}</span>
                 </div>
               </div>
 

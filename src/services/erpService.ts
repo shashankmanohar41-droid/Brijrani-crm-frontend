@@ -3,7 +3,8 @@ import {
   PurchaseOrder, GRN, QualityInspection, StockItem, SalesOrder, SalesInvoice,
   Voucher, Expense, SalesQuotation, PurchaseQuotation, SalesEnquiry, PurchaseEnquiry,
   PickingSlip, PackingSlip, DeliveryChallan, EWayBill, POD, StockTransfer, PurchaseInvoice,
-  Lead, SalesReturn, ReturnInspection, CreditNote, Refund, SalesTarget, SalesCommission
+  Lead, SalesReturn, ReturnInspection, CreditNote, Refund, SalesTarget, SalesCommission,
+  QualityParameter, QualityRebateRule, QualityControl
 } from '../types/erp';
 
 import {
@@ -31,6 +32,9 @@ interface ErpDatabase {
   purchaseOrders: PurchaseOrder[];
   grns: GRN[];
   qualityInspections: QualityInspection[];
+  qualityParameters: QualityParameter[];
+  qualityRebateRules: QualityRebateRule[];
+  qualityControls: QualityControl[];
   stockItems: StockItem[];
   salesEnquiries: SalesEnquiry[];
   salesQuotations: SalesQuotation[];
@@ -113,6 +117,9 @@ export const getDb = (): ErpDatabase => {
     purchaseOrders: [],
     grns: [],
     qualityInspections: [],
+    qualityParameters: [],
+    qualityRebateRules: [],
+    qualityControls: [],
     stockItems: [],
     salesEnquiries: [],
     salesQuotations: [],

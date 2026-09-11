@@ -363,6 +363,141 @@ export interface QualityInspection {
   qualityScore: number;
 }
 
+// ----------------------------------------------------
+// Quality Parameter Master
+// ----------------------------------------------------
+export interface QualityParameter {
+  id?: string;
+  _id?: string;
+  name: string;
+  code: string;
+  unit: string;
+  description?: string;
+  status: 'Active' | 'Inactive';
+  standardValue?: number;
+  minLimit?: number;
+  maxLimit?: number;
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// ----------------------------------------------------
+// Quality / Rebate Master Rule
+// ----------------------------------------------------
+export interface RebateSlab {
+  minDeviation: number;
+  maxDeviation: number;
+  rebateRate: number;
+  rateType?: 'Fixed Amount' | 'Per Unit Deviation' | 'Percentage';
+  description?: string;
+}
+
+export interface QualityRebateRule {
+  id?: string;
+  _id?: string;
+  ruleCode: string;
+  commodityId: string;
+  commodityName: string;
+  parameterId?: string;
+  parameterName: string;
+  unit: string;
+  standardValue: number;
+  minValue?: number;
+  maxValue?: number;
+  tolerance: number;
+  rebateType: 'Standard Rebate' | 'Single Rebate' | 'Double Rebate' | 'All' | 'All Types';
+  calculationMethod: 'Discount' | 'Pro-Rata' | 'Both';
+  rebateBasis: 'Per % Deviation' | 'Flat Rate per MT' | 'Percentage of Base Rate' | 'Tiered Slabs';
+  rebateRate: number;
+  slabs: RebateSlab[];
+  direction: 'HIGHER_IS_WORSE' | 'LOWER_IS_WORSE';
+  effectiveFrom: string;
+  effectiveTo?: string;
+  status: 'Active' | 'Inactive';
+  notes?: string;
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// ----------------------------------------------------
+// Quality Control Document
+// ----------------------------------------------------
+export interface QCTestedParameter {
+  parameterName: string;
+  unit: string;
+  standardValue: number;
+  actualValue: number;
+  deviation: number;
+  tolerance: number;
+  applicableRuleId?: string;
+  ruleCode?: string;
+  rebateBasis: string;
+  rebateRate: number;
+  rebatePerUnit: number;
+  rebateTotal: number;
+  formulaDescription: string;
+  status: 'PASS' | 'WARN' | 'FAIL';
+}
+
+export interface QCAuditTrailEntry {
+  action: 'Created' | 'Updated' | 'Submitted' | 'Reviewed' | 'Approved' | 'Rejected' | 'Modified_After_Approval';
+  user: string;
+  timestamp: string;
+  reason?: string;
+  previousValues?: any;
+  newValues?: any;
+  changes?: Array<{ field: string; oldValue: any; newValue: any }>;
+}
+
+export interface QualityControl {
+  id?: string;
+  _id?: string;
+  qcNumber: string;
+  partyType: 'supplier' | 'farmer';
+  partyId: string;
+  partyName: string;
+  commodityId: string;
+  commodityName: string;
+  vehicleNumber: string;
+  quantity: number;
+  unit: string;
+  baseRate: number;
+  date: string;
+  referenceNumber?: string;
+  poId?: string;
+  poNumber?: string;
+  grnId?: string;
+  grnNumber?: string;
+  rebateType: 'Standard Rebate' | 'Single Rebate' | 'Double Rebate' | 'All' | 'All Types';
+  calculationMethod: 'Discount' | 'Pro-Rata' | 'Both';
+  discountRate: number;
+  discountType?: 'PERCENT' | 'FLAT';
+  discountAmount: number;
+  qualityParameters: QCTestedParameter[];
+  totalRebate: number;
+  totalDeduction: number;
+  baseValue: number;
+  finalRate: number;
+  finalValue: number;
+  calculationBreakdown?: any;
+  status: 'Draft' | 'Submitted' | 'Under Review' | 'Approved' | 'Rejected';
+  inspector?: string;
+  notes?: string;
+  rejectionReason?: string;
+  modificationReason?: string;
+  createdBy: string;
+  updatedBy?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  rejectedBy?: string;
+  rejectedAt?: string;
+  auditTrail: QCAuditTrailEntry[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 // Purchase Invoice types
 export interface PurchaseInvoiceItem {
   id?: string;
@@ -371,6 +506,10 @@ export interface PurchaseInvoiceItem {
   receivedQty: number;
   invoiceQty: number;
   rate: number;
+  baseRate?: number;
+  qualityRebatePerUnit?: number;
+  qualityRebateTotal?: number;
+  settledRate?: number;
   discount: number;
   taxPercent: number;
   taxAmount: number;
@@ -394,6 +533,8 @@ export interface PurchaseInvoice {
   shippingAddress?: string;
   taxType: string;
   subtotal: number;
+  baseSubtotal?: number;
+  qualityRebateDeduction?: number;
   discount: number;
   cgst: number;
   sgst: number;

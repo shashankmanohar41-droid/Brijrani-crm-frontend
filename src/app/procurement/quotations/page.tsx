@@ -87,8 +87,10 @@ export default function PurchaseQuotationsPage() {
       const updated = [...prev];
       const item = updated[index];
       item.rate = newRate;
-      item.taxAmount = Math.round((item.quantity * newRate) * (item.taxPercent / 100));
-      item.lineTotal = Math.round((item.quantity * newRate) + item.taxAmount - item.discount);
+      const discount = item.discount || 0;
+      const taxable = Math.max(0, (item.quantity * newRate) - discount);
+      item.taxAmount = Math.round(taxable * (item.taxPercent / 100));
+      item.lineTotal = Math.round(taxable + item.taxAmount);
       return updated;
     });
   };
@@ -98,7 +100,9 @@ export default function PurchaseQuotationsPage() {
       const updated = [...prev];
       const item = updated[index];
       item.discount = newDiscount;
-      item.lineTotal = Math.round((item.quantity * item.rate) + item.taxAmount - newDiscount);
+      const taxable = Math.max(0, (item.quantity * item.rate) - newDiscount);
+      item.taxAmount = Math.round(taxable * (item.taxPercent / 100));
+      item.lineTotal = Math.round(taxable + item.taxAmount);
       return updated;
     });
   };

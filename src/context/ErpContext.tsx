@@ -107,7 +107,8 @@ export const ErpProvider = ({ children }: { children: ReactNode }) => {
             vouchers: [], expenses: [],
             purchaseReturns: [],
             leads: [], salesReturns: [], returnInspections: [], creditNotes: [],
-            refunds: [], salesTargets: [], salesCommissions: []
+            refunds: [], salesTargets: [], salesCommissions: [],
+            qualityParameters: [], qualityRebateRules: [], qualityControls: []
           };
           localStorage.setItem('brijrani_erp_database_v4', JSON.stringify(emptyDb));
           localStorage.setItem('brijrani_last_cleared_at', serverClearedAt.toString());
@@ -198,7 +199,10 @@ export const ErpProvider = ({ children }: { children: ReactNode }) => {
         creditNotes: [],
         refunds: [],
         salesTargets: [],
-        salesCommissions: []
+        salesCommissions: [],
+        qualityParameters: [],
+        qualityRebateRules: [],
+        qualityControls: []
       };
       localStorage.setItem('brijrani_erp_database_v4', JSON.stringify(emptyDb));
       localStorage.setItem('brijrani_last_cleared_at', Date.now().toString());
@@ -575,8 +579,12 @@ export const ErpProvider = ({ children }: { children: ReactNode }) => {
               supplierId: item.supplierId,
               supplierGSTIN: item.supplierGSTIN || '',
               poNumber: item.poNumber || '',
+              qcId: item.qcId || undefined,
+              qcNumber: item.qcNumber || undefined,
               grnNumber: item.grnNumber || '',
               subtotal: item.subtotal || 0,
+              baseSubtotal: item.baseSubtotal || item.subtotal || 0,
+              qualityRebateDeduction: item.qualityRebateDeduction || 0,
               freight: item.freight || 0,
               cgst: item.cgst || 0,
               sgst: item.sgst || 0,
@@ -592,6 +600,13 @@ export const ErpProvider = ({ children }: { children: ReactNode }) => {
                 receivedQty: i.receivedQty || 0,
                 invoiceQty: i.invoiceQty || 0,
                 rate: i.rate || 0,
+                baseRate: i.baseRate !== undefined ? i.baseRate : i.rate,
+                qualityRebatePerUnit: i.qualityRebatePerUnit || 0,
+                qualityRebateTotal: i.qualityRebateTotal || 0,
+                settledRate: i.settledRate !== undefined ? i.settledRate : i.rate,
+                discount: i.discount || 0,
+                taxPercent: i.taxPercent || 0,
+                taxAmount: i.taxAmount || 0,
                 amount: i.amount || 0
               }))
             }));
@@ -628,6 +643,14 @@ export const ErpProvider = ({ children }: { children: ReactNode }) => {
             }));
         } catch (e) {
           console.error('Failed to fetch quality inspections:', e);
+        }
+
+        // Fetch Quality Control (QC & Rebate Assessments) from backend
+        try {
+          const resQc = await api.get('/quality-control');
+          currentDb.qualityControls = resQc.data?.data || [];
+        } catch (e) {
+          console.error('Failed to fetch quality control records:', e);
         }
 
         // Seed demo transactions dynamically if empty (keeps the Profit & Loss statement looking full and premium on startup)
