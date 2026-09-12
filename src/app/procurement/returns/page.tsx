@@ -456,7 +456,7 @@ export default function PurchaseReturnsPage() {
 
       {/* CREATE LOG REQUEST MODAL */}
       {isCreateOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex justify-center items-center z-50 p-4">
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex justify-center items-center z-[9999] p-4 sm:p-6 overflow-y-auto">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl overflow-hidden border border-slate-200 flex flex-col max-h-[85vh]">
             <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center shrink-0">
               <h3 className="font-bold text-slate-800 flex items-center gap-1.5">

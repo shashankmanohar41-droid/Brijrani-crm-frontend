@@ -1110,8 +1110,8 @@ export default function QualityControlPage() {
       {/* 5. CREATE / EDIT QC MODAL & DYNAMIC FORM (Section 2 & 25) */}
       {/* ========================================================================= */}
       {isFormOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col overflow-hidden animate-scale-up">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 sm:p-6 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] my-auto flex flex-col overflow-hidden animate-scale-up">
             {/* Modal Header */}
             <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
               <div className="flex items-center gap-2.5">
@@ -1600,8 +1600,8 @@ export default function QualityControlPage() {
       {/* 6. VIEW QC DETAILS MODAL (Full Transparency & Audit Trail Timeline - Section 14, 17) */}
       {/* ========================================================================= */}
       {isViewModalOpen && selectedQC && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col overflow-hidden animate-scale-up">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 sm:p-6 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] my-auto flex flex-col overflow-hidden animate-scale-up">
             {/* Header */}
             <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
               <div className="flex items-center gap-3">
@@ -1815,8 +1815,8 @@ export default function QualityControlPage() {
       {/* 7. APPROVED QC EDITING AUTHORIZATION MODAL (Section 16) */}
       {/* ========================================================================= */}
       {isApprovedEditModalOpen && selectedQC && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 animate-scale-up">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 sm:p-6 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full my-auto p-6 space-y-4 animate-scale-up">
             <div className="flex items-center gap-3 text-amber-600">
               <div className="p-2 bg-amber-100 rounded-lg">
                 <ShieldAlert size={22} />
@@ -1870,8 +1870,8 @@ export default function QualityControlPage() {
       {/* 8. REJECT QC MODAL (Section 15, 17) */}
       {/* ========================================================================= */}
       {isRejectModalOpen && selectedQC && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 animate-scale-up">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 sm:p-6 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full my-auto p-6 space-y-4 animate-scale-up">
             <div className="flex items-center gap-3 text-red-600">
               <div className="p-2 bg-red-100 rounded-lg">
                 <AlertTriangle size={22} />
@@ -1920,8 +1920,8 @@ export default function QualityControlPage() {
       {/* 9. PRINTABLE QC VOUCHER MODAL */}
       {/* ========================================================================= */}
       {isPrintModalOpen && selectedQC && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-xs p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full p-8 space-y-6 animate-scale-up border border-slate-300">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/70 backdrop-blur-xs p-4 sm:p-6 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full my-auto p-8 space-y-6 animate-scale-up border border-slate-300">
             {/* Action Bar (hidden in print) */}
             <div className="flex items-center justify-between border-b pb-4 print:hidden">
               <div className="text-xs font-bold text-slate-500">Print Preview</div>

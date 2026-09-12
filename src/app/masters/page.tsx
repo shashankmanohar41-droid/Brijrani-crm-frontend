@@ -1195,8 +1195,8 @@ function MastersHubPageContent() {
 
         {/* ADD/EDIT REBATE RULE MODAL (Section 10, 19, 20) */}
         {isRuleModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[92vh] flex flex-col overflow-hidden animate-scale-up">
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 sm:p-6 overflow-y-auto">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] my-auto flex flex-col overflow-hidden animate-scale-up">
               <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
                 <div className="flex items-center gap-2.5">
                   <div className="p-2 bg-emerald-600 text-white rounded-lg">
@@ -1687,8 +1687,8 @@ function MastersHubPageContent() {
 
         {/* ADD/EDIT QUALITY PARAMETER MODAL (Section 12) */}
         {isParamModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 animate-scale-up">
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 sm:p-6 overflow-y-auto">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full my-auto p-6 space-y-4 animate-scale-up">
               <div className="flex items-center justify-between border-b pb-3">
                 <h3 className="text-base font-bold text-slate-900">
                   {editingParamId ? 'Edit Quality Parameter' : 'New Quality Parameter'}
