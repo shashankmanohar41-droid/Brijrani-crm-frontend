@@ -40,7 +40,7 @@ export default function ErpLayoutWrapper({ children }: { children: React.ReactNo
         <Header />
 
         {/* Page Content Body */}
-        <main className="flex-1 overflow-y-auto p-6 focus:outline-none">
+        <main className="flex-1 overflow-y-auto p-6 focus:outline-none relative z-20">
           <div className="max-w-[1600px] mx-auto space-y-6">
             {children}
           </div>

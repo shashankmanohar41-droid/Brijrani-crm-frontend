@@ -20,7 +20,7 @@ export default function Header() {
   ];
 
   return (
-    <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between shrink-0 shadow-sm relative z-[99]">
+    <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between shrink-0 shadow-sm relative z-10">
       {/* Left Section: Global Search */}
       <div className="flex items-center gap-4">
         {/* Global Search */}
