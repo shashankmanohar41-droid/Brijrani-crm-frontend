@@ -244,44 +244,114 @@ export default function QualityControlPage() {
     setCalculationResult(calc);
   }, [formQuantity, formBaseRate, formCalcMethod, formRebateType, formDiscountRate, formDiscountType, formParameters, formCommodityId, formDate, rebateRules, db.commodities]);
 
+  // Filter POs and GRNs that already have an active/draft/approved QC record created
+  const availablePOs = useMemo(() => {
+    const usedPoIdentifiers = new Set<string>();
+
+    qcList.forEach(qc => {
+      // If currently editing this specific QC, allow its existing PO
+      if (editingQCId && (qc._id === editingQCId || qc.id === editingQCId)) {
+        return;
+      }
+      if (qc.status !== 'Rejected') {
+        if (qc.poId) usedPoIdentifiers.add(String(qc.poId).toLowerCase().trim());
+        if (qc.poNumber) usedPoIdentifiers.add(String(qc.poNumber).toLowerCase().trim());
+        if (qc.referenceNumber) usedPoIdentifiers.add(String(qc.referenceNumber).toLowerCase().trim());
+      }
+    });
+
+    return db.purchaseOrders.filter(p => {
+      const idStr = String(p.id || (p as any)._id || '').toLowerCase().trim();
+      const poNoStr = String(p.poNo || (p as any).poNumber || '').toLowerCase().trim();
+
+      const isUsed = (idStr && usedPoIdentifiers.has(idStr)) || (poNoStr && usedPoIdentifiers.has(poNoStr));
+      return !isUsed;
+    });
+  }, [db.purchaseOrders, qcList, editingQCId]);
+
+  const availableGRNs = useMemo(() => {
+    const usedGrnIdentifiers = new Set<string>();
+
+    qcList.forEach(qc => {
+      if (editingQCId && (qc._id === editingQCId || qc.id === editingQCId)) return;
+      if (qc.status !== 'Rejected') {
+        if (qc.grnId) usedGrnIdentifiers.add(String(qc.grnId).toLowerCase().trim());
+        if ((qc as any).grnNumber) usedGrnIdentifiers.add(String((qc as any).grnNumber).toLowerCase().trim());
+        if (qc.referenceNumber) usedGrnIdentifiers.add(String(qc.referenceNumber).toLowerCase().trim());
+      }
+    });
+
+    return db.grns.filter(g => {
+      const idStr = String(g.id || (g as any)._id || '').toLowerCase().trim();
+      const grnNoStr = String(g.grnNo || (g as any).grnNumber || '').toLowerCase().trim();
+
+      const isUsed = (idStr && usedGrnIdentifiers.has(idStr)) || (grnNoStr && usedGrnIdentifiers.has(grnNoStr));
+      return !isUsed;
+    });
+  }, [db.grns, qcList, editingQCId]);
+
   // Auto-fetch details when selecting reference PO or GRN
   const handleSelectReferencePo = (poNo: string) => {
-    const po = db.purchaseOrders.find(p => p.poNo === poNo || p.id === poNo);
+    const po = db.purchaseOrders.find(p => 
+      p.poNo === poNo || 
+      p.id === poNo || 
+      (p as any)._id === poNo || 
+      (p as any).poNumber === poNo
+    );
     if (!po) return;
-    setFormRefNumber(po.poNo);
-    setFormPoId(po.id || '');
+
+    const actualPoNo = po.poNo || (po as any).poNumber || '';
+    setFormRefNumber(actualPoNo);
+    setFormPoId(po.id || (po as any)._id || '');
     setFormPartyType(po.partyType || 'supplier');
-    setFormPartyId(po.partyId || '');
+    
+    // Resolve partner ID
+    const partnerId = po.partyId || (po as any).supplier || '';
+    if (partnerId) {
+      setFormPartyId(partnerId);
+    } else {
+      const firstPartner = (po.partyType === 'farmer' ? db.farmers[0]?.id : db.suppliers[0]?.id) || '';
+      setFormPartyId(firstPartner);
+    }
+
     if (po.items && po.items.length > 0) {
       const item = po.items[0];
-      const comm = db.commodities.find(c => c.name === item.item || c.id === item.item || c.sku === (item as any).sku);
-      if (comm) setFormCommodityId(comm.id || comm._id || '');
+      const comm = db.commodities.find(c => 
+        c.name?.toLowerCase() === item.item?.toLowerCase() || 
+        (c.id && c.id === item.item) || 
+        ((c as any)._id && (c as any)._id === item.item) ||
+        (item as any).description?.toLowerCase() === c.name?.toLowerCase()
+      );
+      if (comm) {
+        setFormCommodityId(comm.id || (comm as any)._id || '');
+      }
       setFormQuantity(item.quantity || 100);
       setFormBaseRate(item.rate || 25000);
       setFormUnit(item.unit || 'MT');
     }
-    showToast(`Loaded details from Purchase Order ${po.poNo}`, 'info');
+    showToast(`Loaded details from Purchase Order ${actualPoNo}`, 'info');
   };
 
   const handleSelectReferenceGrn = (grnNo: string) => {
-    const grn = db.grns.find(g => g.grnNo === grnNo || g.id === grnNo);
+    const grn = db.grns.find(g => g.grnNo === grnNo || g.id === grnNo || (g as any)._id === grnNo || (g as any).grnNumber === grnNo);
     if (!grn) return;
-    setFormRefNumber(grn.grnNo);
-    setFormGrnId(grn.id || '');
+    const actualGrnNo = grn.grnNo || (grn as any).grnNumber || '';
+    setFormRefNumber(actualGrnNo);
+    setFormGrnId(grn.id || (grn as any)._id || '');
     setFormVehicleNumber(grn.vehicleNo || '');
     setFormPartyType(grn.partyType || 'supplier');
     setFormPartyId(grn.partyId || '');
     if (grn.items && grn.items.length > 0) {
       const item = grn.items[0];
-      const comm = db.commodities.find(c => c.name === item.item || c.id === item.item);
+      const comm = db.commodities.find(c => c.name?.toLowerCase() === item.item?.toLowerCase() || c.id === item.item || (c as any)._id === item.item);
       if (comm) {
-        setFormCommodityId(comm.id || comm._id || '');
+        setFormCommodityId(comm.id || (comm as any)._id || '');
         setFormBaseRate(comm.purchaseCost || 22000);
       }
       setFormQuantity(item.receivedNow || item.orderedQty || 50);
       setFormUnit(item.unit || 'MT');
     }
-    showToast(`Loaded details from GRN ${grn.grnNo}`, 'info');
+    showToast(`Loaded details from GRN ${actualGrnNo}`, 'info');
   };
 
   // Open Add QC Modal
@@ -292,17 +362,8 @@ export default function QualityControlPage() {
     const seq = String(qcList.length + 1).padStart(4, '0');
     setEditingQCId(null);
     setFormQcNumber(`QC-${yr}${mo}-${seq}`);
-    setFormPartyType('farmer');
-    setFormPartyId(db.farmers[0]?.id || db.farmers[0]?._id || '');
-    setFormCommodityId(db.commodities[0]?.id || db.commodities[0]?._id || '');
     setFormVehicleNumber('BR-01-GB-4590');
-    setFormQuantity(100);
-    setFormUnit('MT');
-    setFormBaseRate(db.commodities[0]?.purchaseCost || 25000);
     setFormDate(new Date().toISOString().split('T')[0]);
-    setFormRefNumber('');
-    setFormPoId('');
-    setFormGrnId('');
     setFormCalcMethod('Pro-Rata');
     setFormRebateType('Standard Rebate');
     setFormDiscountRate(2);
@@ -310,6 +371,21 @@ export default function QualityControlPage() {
     setFormInspector('QC Analyst');
     setFormNotes('');
     setModificationReasonInput('');
+
+    // Pre-populate from first available PO if any
+    if (availablePOs.length > 0) {
+      const firstPo = availablePOs[0];
+      handleSelectReferencePo(firstPo.poNo || (firstPo as any).poNumber);
+    } else {
+      setFormRefNumber('');
+      setFormPoId('');
+      setFormPartyType('supplier');
+      setFormPartyId('');
+      setFormCommodityId('');
+      setFormQuantity(100);
+      setFormBaseRate(25000);
+    }
+
     setIsFormOpen(true);
   };
 
@@ -372,7 +448,11 @@ export default function QualityControlPage() {
   // Submit Save QC (Create / Update)
   const handleSaveQC = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formPartyId || !formCommodityId || !formQuantity || formQuantity <= 0 || !formBaseRate || formBaseRate < 0) {
+    if (!formRefNumber && !formPoId) {
+      showToast('A linked Purchase Order is mandatory. Please select a Purchase Order to create Quality Inspection.', 'error');
+      return;
+    }
+    if (!formPartyId || !formCommodityId || !formQuantity || Number(formQuantity) <= 0 || !formBaseRate || Number(formBaseRate) < 0) {
       showToast('Please provide valid positive numbers for quantity and rate', 'error');
       return;
     }
@@ -1135,35 +1215,70 @@ export default function QualityControlPage() {
 
             {/* Modal Body */}
             <form onSubmit={handleSaveQC} className="p-6 overflow-y-auto space-y-5 flex-1">
-              {/* Quick Auto-fetch References */}
-              <div className="p-3 bg-emerald-50/50 border border-emerald-200/70 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
-                <div className="flex items-center gap-2 text-emerald-900 font-semibold">
-                  <PackageCheck size={16} className="text-emerald-600 shrink-0" />
-                  <span>Auto-fetch details from existing ERP Purchase Order or Inward GRN:</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <select
-                    className="p-1.5 border border-emerald-300 rounded-md bg-white text-xs text-slate-800"
-                    onChange={(e) => { if (e.target.value) handleSelectReferencePo(e.target.value); }}
-                    defaultValue=""
-                  >
-                    <option value="" disabled>-- Link Purchase Order --</option>
-                    {db.purchaseOrders.map(p => (
-                      <option key={p.id} value={p.poNo}>{p.poNo} ({p.partyType})</option>
-                    ))}
-                  </select>
+              {/* Mandatory Purchase Order Link Section */}
+              <div className={`p-3.5 rounded-xl border transition ${
+                formRefNumber ? 'bg-emerald-50/70 border-emerald-300' : 'bg-amber-50/80 border-amber-300'
+              }`}>
+                <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2 text-slate-800 font-semibold">
+                    <PackageCheck size={18} className={formRefNumber ? 'text-emerald-600' : 'text-amber-600'} />
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-900">
+                          Select Purchase Order to Inspect <span className="text-red-500">*</span>
+                        </span>
+                        {formRefNumber && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                            <Check size={10} /> Linked: {formRefNumber}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-500 font-normal">
+                        Quality Inspection requires an approved PO (Orders already inspected are automatically excluded)
+                      </p>
+                    </div>
+                  </div>
 
-                  <select
-                    className="p-1.5 border border-emerald-300 rounded-md bg-white text-xs text-slate-800"
-                    onChange={(e) => { if (e.target.value) handleSelectReferenceGrn(e.target.value); }}
-                    defaultValue=""
-                  >
-                    <option value="" disabled>-- Link Inward GRN --</option>
-                    {db.grns.map(g => (
-                      <option key={g.id} value={g.grnNo}>{g.grnNo} ({g.vehicleNo})</option>
-                    ))}
-                  </select>
+                  <div className="flex items-center gap-2">
+                    <select
+                      className={`p-2 border rounded-lg bg-white text-xs font-bold text-slate-800 shadow-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none min-w-[220px] ${
+                        formRefNumber ? 'border-emerald-300' : 'border-amber-400 bg-amber-50/30'
+                      }`}
+                      onChange={(e) => { if (e.target.value) handleSelectReferencePo(e.target.value); }}
+                      value={formRefNumber || ""}
+                      required
+                    >
+                      <option value="" disabled>-- Link Purchase Order ({availablePOs.length} Pending QC) --</option>
+                      {availablePOs.map(p => (
+                        <option key={p.id || (p as any)._id} value={p.poNo || (p as any).poNumber}>
+                          {p.poNo || (p as any).poNumber} ({p.partyType || 'supplier'})
+                        </option>
+                      ))}
+                    </select>
+
+                    <select
+                      className="p-2 border border-slate-300 rounded-lg bg-white text-xs text-slate-700 shadow-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      onChange={(e) => { if (e.target.value) handleSelectReferenceGrn(e.target.value); }}
+                      value={formGrnId || ""}
+                    >
+                      <option value="">-- Optional: Link Inward GRN ({availableGRNs.length}) --</option>
+                      {availableGRNs.map(g => (
+                        <option key={g.id || (g as any)._id} value={g.grnNo || (g as any).grnNumber}>
+                          {g.grnNo || (g as any).grnNumber} ({g.vehicleNo || 'N/A'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
+
+                {availablePOs.length === 0 && !editingQCId && (
+                  <div className="mt-2.5 p-2.5 bg-amber-100/80 border border-amber-300 rounded-lg text-[11px] text-amber-900 flex items-center gap-2">
+                    <AlertTriangle size={15} className="text-amber-700 shrink-0" />
+                    <span>
+                      <strong>All approved Purchase Orders are already inspected!</strong> To inspect a new commodity delivery, please create and approve a new Purchase Order in Procurement &gt; Purchase Orders.
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Basic Details (Section 2) */}
