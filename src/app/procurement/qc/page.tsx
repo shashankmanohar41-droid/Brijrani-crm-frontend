@@ -285,7 +285,13 @@ export default function QualityControlPage() {
       }
     });
 
-    return db.purchaseOrders.filter(p => {
+    // Filter only Approved Purchase Orders (Draft / Pending Approval / Cancelled POs cannot undergo QC)
+    const approvedPOs = db.purchaseOrders.filter(p => {
+      const st = (p.status || '').toLowerCase().trim();
+      return st === 'approved' || st === 'sent' || st === 'partially received' || st === 'received';
+    });
+
+    return approvedPOs.filter(p => {
       const idStr = String(p.id || (p as any)._id || '').toLowerCase().trim();
       const poNoStr = String(p.poNo || (p as any).poNumber || '').toLowerCase().trim();
       const cleanId = idStr.replace(/[^a-z0-9]/g, '');
@@ -1323,10 +1329,10 @@ export default function QualityControlPage() {
                 </div>
 
                 {availablePOs.length === 0 && !editingQCId && (
-                  <div className="mt-2.5 p-2.5 bg-amber-100/80 border border-amber-300 rounded-lg text-[11px] text-amber-900 flex items-center gap-2">
-                    <AlertTriangle size={15} className="text-amber-700 shrink-0" />
+                  <div className="mt-2.5 p-2.5 bg-amber-50 border border-amber-300 rounded-lg text-xs text-amber-900 flex items-center gap-2 font-medium">
+                    <AlertTriangle size={16} className="text-amber-700 shrink-0" />
                     <span>
-                      <strong>All approved Purchase Orders are already inspected!</strong> To inspect a new commodity delivery, please create and approve a new Purchase Order in Procurement &gt; Purchase Orders.
+                      <strong>No Approved Purchase Orders Available:</strong> Only Purchase Orders in <strong>Approved</strong> status can undergo Quality Control inspection. Please create and approve a Purchase Order in Procurement &gt; Purchase Orders first.
                     </span>
                   </div>
                 )}
