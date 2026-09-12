@@ -10,13 +10,18 @@ import { formatDate } from '../../../utils/dateUtils';
 import DataTable from '../../../components/shared/DataTable';
 import DocumentTimeline from '../../../components/shared/DocumentTimeline';
 import ApprovalPanel from '../../../components/shared/ApprovalPanel';
-import { ShoppingCart, Plus, Calendar, Landmark, Info, FilePlus, Truck, FileCheck, Edit3, Download, Eye, Trash2, Scale, ClipboardCheck } from 'lucide-react';
+import { ShoppingCart, Plus, Calendar, Landmark, Info, FilePlus, Truck, FileCheck, Edit3, Download, Eye, Trash2, Scale, ClipboardCheck, CheckCircle2, ShieldCheck, Lock } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { jsPDF } from 'jspdf';
 
 export default function PurchaseOrdersPage() {
   const { db, refreshDb, currentUserRole, showToast } = useErp();
   const router = useRouter();
+
+  const isAdmin = useMemo(() => {
+    const role = (currentUserRole || '').toLowerCase();
+    return role.includes('admin') || role.includes('manager') || role === 'super admin' || role === 'admin user';
+  }, [currentUserRole]);
 
   const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -268,20 +273,37 @@ export default function PurchaseOrdersPage() {
 
   const handleApprove = (comment?: string) => {
     if (!selectedPO) return;
-    erpService.approvePurchaseOrder(selectedPO.id, currentUserRole, comment);
+    if (!isAdmin) {
+      showToast('Permission Denied: Only Admin users can approve Purchase Orders.', 'error');
+      return;
+    }
+    erpService.approvePurchaseOrder(selectedPO.id, currentUserRole || 'Admin', comment || 'Approved by Admin');
     refreshDb();
     const updated = erpService.purchaseOrders.getById(selectedPO.id);
-    if (updated) setSelectedPO(updated);
-    showToast(`Purchase Order Approved!`, 'success');
+    if (updated) {
+      setSelectedPO(updated);
+    } else {
+      setSelectedPO(prev => prev ? { ...prev, status: 'Approved' } : null);
+    }
+    showToast(`Purchase Order ${selectedPO.poNo} approved successfully!`, 'success');
   };
 
   const handleReject = (comment?: string) => {
     if (!selectedPO) return;
-    erpService.rejectPurchaseOrder(selectedPO.id, currentUserRole, comment);
+    if (!isAdmin) {
+      showToast('Permission Denied: Only Admin users can reject Purchase Orders.', 'error');
+      return;
+    }
+    const rejectReason = comment || prompt('Enter reason for rejecting Purchase Order:') || 'Rejected by Admin';
+    erpService.rejectPurchaseOrder(selectedPO.id, currentUserRole || 'Admin', rejectReason);
     refreshDb();
     const updated = erpService.purchaseOrders.getById(selectedPO.id);
-    if (updated) setSelectedPO(updated);
-    showToast("Purchase Order Rejected", 'error');
+    if (updated) {
+      setSelectedPO(updated);
+    } else {
+      setSelectedPO(prev => prev ? { ...prev, status: 'Cancelled' } : null);
+    }
+    showToast(`Purchase Order ${selectedPO.poNo} rejected`, 'info');
   };
 
   const handleDownloadPDF = (order: PurchaseOrder) => {
@@ -479,10 +501,50 @@ export default function PurchaseOrdersPage() {
           {row.status}
         </span>
       )
+    },
+    {
+      header: 'Actions',
+      accessor: (row: PurchaseOrder) => (
+        <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+          {(row.status === 'Draft' || row.status === 'Pending Approval') && (
+            <button
+              onClick={() => {
+                if (!isAdmin) {
+                  showToast('Permission Denied: Only Admin users can approve Purchase Orders.', 'error');
+                  return;
+                }
+                erpService.approvePurchaseOrder(row.id, currentUserRole || 'Admin', 'Approved by Admin');
+                refreshDb();
+                setSelectedPO(prev => prev && prev.id === row.id ? { ...prev, status: 'Approved' } : prev);
+                showToast(`Purchase Order ${row.poNo} approved successfully!`, 'success');
+              }}
+              title={isAdmin ? `Approve PO ${row.poNo} (Admin Only)` : 'Admin Authorization Required'}
+              className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 transition ${
+                isAdmin 
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-xs' 
+                  : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+              }`}
+            >
+              <CheckCircle2 size={11} />
+              <span>Approve</span>
+            </button>
+          )}
+          {(row.status === 'Approved' || row.status === 'Partially Received' || row.status === 'Received') && (
+            <button
+              onClick={() => router.push(`/procurement/qc?action=new&po=${row.id}`)}
+              title={`Conduct Quality Inspection for ${row.poNo}`}
+              className="px-2 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 bg-pink-50 text-pink-700 hover:bg-pink-100 border border-pink-200 cursor-pointer transition"
+            >
+              <Scale size={11} className="text-pink-600" />
+              <span>QC</span>
+            </button>
+          )}
+        </div>
+      )
     }
   ];
 
-  if (!['Super Admin', 'Purchase Manager'].includes(currentUserRole)) {
+  if (!isAdmin && !['Super Admin', 'Admin User', 'Purchase Manager'].includes(currentUserRole)) {
     return (
       <div className="bg-white border border-slate-200 rounded-xl p-8 text-center max-w-md mx-auto mt-20 space-y-4 animate-fade-in">
         <div className="w-12 h-12 rounded-full bg-red-50 text-red-500 flex items-center justify-center mx-auto text-lg font-bold">✕</div>
@@ -678,6 +740,48 @@ export default function PurchaseOrdersPage() {
                   </button>
                 </div>
                 {(selectedPO.status === 'Draft' || selectedPO.status === 'Pending Approval') && (
+                  <div className="bg-emerald-50/70 border border-emerald-300 rounded-xl p-3.5 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 text-emerald-900 font-bold text-xs">
+                        <ShieldCheck size={16} className="text-emerald-600" />
+                        <span>Order Authorization Required</span>
+                      </div>
+                      <span className="text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 px-2 py-0.5 rounded-full">
+                        Status: {selectedPO.status}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 font-normal">
+                      This Purchase Order requires Admin approval before Quality Control (QC) or downstream delivery can proceed.
+                    </p>
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        onClick={() => handleApprove()}
+                        disabled={!isAdmin}
+                        title={isAdmin ? 'Approve this Purchase Order' : 'Admin authorization required'}
+                        className={`flex-1 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-md transition ${
+                          isAdmin
+                            ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-emerald-600/20'
+                            : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                        }`}
+                      >
+                        <CheckCircle2 size={15} />
+                        <span>Approve Purchase Order (Admin)</span>
+                      </button>
+                      <button
+                        onClick={() => handleReject()}
+                        disabled={!isAdmin}
+                        className={`px-3 py-2.5 rounded-lg text-xs font-bold border transition ${
+                          isAdmin
+                            ? 'border-red-300 text-red-600 hover:bg-red-50 cursor-pointer'
+                            : 'border-slate-200 text-slate-400 cursor-not-allowed'
+                        }`}
+                      >
+                        <span>Reject</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {(selectedPO.status === 'Draft' || selectedPO.status === 'Pending Approval') && (
                   <button
                     onClick={handleOpenEdit}
                     className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/10 cursor-pointer transition mb-2"
@@ -685,17 +789,6 @@ export default function PurchaseOrdersPage() {
                     <Edit3 size={14} />
                     <span>Edit Purchase Order</span>
                   </button>
-                )}
-                {selectedPO.status === 'Pending Approval' && (
-                  <ApprovalPanel
-                    documentId={selectedPO.id}
-                    documentNo={selectedPO.poNo}
-                    documentTotal={selectedPO.total}
-                    approvalHistory={selectedPO.approvalHistory || []}
-                    status={selectedPO.status}
-                    onApprove={handleApprove}
-                    onReject={handleReject}
-                  />
                 )}
 
                 {/* Sourcing Lifecycle Stages & Linked Documents Tracker (PO -> QC -> Invoice -> GRN -> Payment) */}
