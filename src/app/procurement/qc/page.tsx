@@ -246,28 +246,65 @@ export default function QualityControlPage() {
 
   // Filter POs and GRNs that already have an active/draft/approved QC record created
   const availablePOs = useMemo(() => {
-    const usedPoIdentifiers = new Set<string>();
+    const usedPoSet = new Set<string>();
 
+    const addIdentifier = (val?: any) => {
+      if (!val) return;
+      const s = String(val).trim().toLowerCase();
+      if (!s) return;
+      usedPoSet.add(s);
+      usedPoSet.add(s.replace(/[^a-z0-9]/g, ''));
+      // If not a 24-char MongoDB ObjectId, extract sequence numbers (e.g. '00007' and '7')
+      if (!/^[0-9a-fA-F]{24}$/.test(s)) {
+        const numMatch = s.match(/\d+$/);
+        if (numMatch) {
+          usedPoSet.add(numMatch[0]);
+          usedPoSet.add(String(parseInt(numMatch[0], 10)));
+        }
+      }
+    };
+
+    // From QC List (all except Rejected)
     qcList.forEach(qc => {
       // If currently editing this specific QC, allow its existing PO
       if (editingQCId && (qc._id === editingQCId || qc.id === editingQCId)) {
         return;
       }
       if (qc.status !== 'Rejected') {
-        if (qc.poId) usedPoIdentifiers.add(String(qc.poId).toLowerCase().trim());
-        if (qc.poNumber) usedPoIdentifiers.add(String(qc.poNumber).toLowerCase().trim());
-        if (qc.referenceNumber) usedPoIdentifiers.add(String(qc.referenceNumber).toLowerCase().trim());
+        addIdentifier(qc.poId);
+        addIdentifier(qc.poNumber);
+        addIdentifier(qc.referenceNumber);
+      }
+    });
+
+    // From ErpContext quality inspections (if any)
+    (db.qualityInspections || []).forEach((qi: any) => {
+      if (qi.status !== 'Rejected') {
+        addIdentifier(qi.poId);
+        addIdentifier(qi.poNo);
       }
     });
 
     return db.purchaseOrders.filter(p => {
       const idStr = String(p.id || (p as any)._id || '').toLowerCase().trim();
       const poNoStr = String(p.poNo || (p as any).poNumber || '').toLowerCase().trim();
+      const cleanId = idStr.replace(/[^a-z0-9]/g, '');
+      const cleanPoNo = poNoStr.replace(/[^a-z0-9]/g, '');
 
-      const isUsed = (idStr && usedPoIdentifiers.has(idStr)) || (poNoStr && usedPoIdentifiers.has(poNoStr));
-      return !isUsed;
+      if (idStr && usedPoSet.has(idStr)) return false;
+      if (cleanId && usedPoSet.has(cleanId)) return false;
+      if (poNoStr && usedPoSet.has(poNoStr)) return false;
+      if (cleanPoNo && usedPoSet.has(cleanPoNo)) return false;
+
+      if (!/^[0-9a-fA-F]{24}$/.test(poNoStr)) {
+        const poNumMatch = poNoStr.match(/\d+$/);
+        if (poNumMatch && (usedPoSet.has(poNumMatch[0]) || usedPoSet.has(String(parseInt(poNumMatch[0], 10))))) {
+          return false;
+        }
+      }
+      return true;
     });
-  }, [db.purchaseOrders, qcList, editingQCId]);
+  }, [db.purchaseOrders, db.qualityInspections, qcList, editingQCId]);
 
   const availableGRNs = useMemo(() => {
     const usedGrnIdentifiers = new Set<string>();
@@ -306,7 +343,13 @@ export default function QualityControlPage() {
     setFormPartyType(po.partyType || 'supplier');
     
     // Resolve partner ID
-    const partnerId = po.partyId || (po as any).supplier || '';
+    let partnerId = '';
+    if (po.partyId) {
+      partnerId = typeof po.partyId === 'object' ? String((po.partyId as any)?._id || (po.partyId as any)?.id || '') : String(po.partyId);
+    } else if ((po as any).supplier) {
+      partnerId = typeof (po as any).supplier === 'object' ? String(((po as any).supplier as any)?._id || ((po as any).supplier as any)?.id || '') : String((po as any).supplier);
+    }
+
     if (partnerId) {
       setFormPartyId(partnerId);
     } else {
@@ -316,14 +359,18 @@ export default function QualityControlPage() {
 
     if (po.items && po.items.length > 0) {
       const item = po.items[0];
+      const rawItemVal = typeof item.item === 'object' && item.item !== null ? String((item.item as any)?._id || (item.item as any)?.name || '') : String(item.item || '');
+      const rawDesc = String((item as any).description || '');
+
       const comm = db.commodities.find(c => 
-        c.name?.toLowerCase() === item.item?.toLowerCase() || 
-        (c.id && c.id === item.item) || 
-        ((c as any)._id && (c as any)._id === item.item) ||
-        (item as any).description?.toLowerCase() === c.name?.toLowerCase()
+        (c.id && (c.id === rawItemVal || (c as any)._id === rawItemVal)) ||
+        c.name?.toLowerCase() === rawItemVal.toLowerCase() || 
+        (rawDesc && c.name?.toLowerCase() === rawDesc.toLowerCase())
       );
       if (comm) {
         setFormCommodityId(comm.id || (comm as any)._id || '');
+      } else if (db.commodities.length > 0) {
+        setFormCommodityId(db.commodities[0].id || (db.commodities[0] as any)._id || '');
       }
       setFormQuantity(item.quantity || 100);
       setFormBaseRate(item.rate || 25000);
@@ -356,6 +403,10 @@ export default function QualityControlPage() {
 
   // Open Add QC Modal
   const handleOpenCreateModal = () => {
+    if (availablePOs.length === 0) {
+      showToast('All approved Purchase Orders already have Quality Control inspections completed! Please create a new PO first.', 'info');
+    }
+
     const now = new Date();
     const yr = now.getFullYear();
     const mo = String(now.getMonth() + 1).padStart(2, '0');
@@ -375,7 +426,7 @@ export default function QualityControlPage() {
     // Pre-populate from first available PO if any
     if (availablePOs.length > 0) {
       const firstPo = availablePOs[0];
-      handleSelectReferencePo(firstPo.poNo || (firstPo as any).poNumber);
+      handleSelectReferencePo(firstPo.poNo || (firstPo as any).poNumber || firstPo.id);
     } else {
       setFormRefNumber('');
       setFormPoId('');
@@ -1300,10 +1351,15 @@ export default function QualityControlPage() {
                   </div>
 
                   <div>
-                    <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Partner Type *</label>
+                    <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">
+                      Partner Type * {formRefNumber && <span className="text-[9px] text-emerald-600 font-normal">(From PO)</span>}
+                    </label>
                     <select
-                      className="w-full p-2 border border-slate-200 rounded-lg text-xs bg-white text-slate-800 font-medium"
+                      className={`w-full p-2 border border-slate-200 rounded-lg text-xs font-medium ${
+                        formRefNumber ? 'bg-slate-50 text-slate-700 cursor-not-allowed' : 'bg-white text-slate-800'
+                      }`}
                       value={formPartyType}
+                      disabled={!!formRefNumber}
                       onChange={e => {
                         const pt = e.target.value as 'supplier' | 'farmer';
                         setFormPartyType(pt);
@@ -1317,11 +1373,14 @@ export default function QualityControlPage() {
 
                   <div>
                     <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">
-                      {formPartyType === 'farmer' ? 'Farmer Name *' : 'Supplier Name *'}
+                      {formPartyType === 'farmer' ? 'Farmer Name *' : 'Supplier Name *'} {formRefNumber && <span className="text-[9px] text-emerald-600 font-normal">(From PO)</span>}
                     </label>
                     <select
-                      className="w-full p-2 border border-slate-200 rounded-lg text-xs bg-white text-slate-800 font-medium"
+                      className={`w-full p-2 border border-slate-200 rounded-lg text-xs font-medium ${
+                        formRefNumber ? 'bg-slate-50 text-slate-700 cursor-not-allowed' : 'bg-white text-slate-800'
+                      }`}
                       value={formPartyId}
+                      disabled={!!formRefNumber}
                       onChange={e => setFormPartyId(e.target.value)}
                       required
                     >
@@ -1334,10 +1393,15 @@ export default function QualityControlPage() {
                   </div>
 
                   <div>
-                    <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Commodity *</label>
+                    <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">
+                      Commodity * {formRefNumber && <span className="text-[9px] text-emerald-600 font-normal">(From PO)</span>}
+                    </label>
                     <select
-                      className="w-full p-2 border border-slate-200 rounded-lg text-xs bg-white text-slate-800 font-medium"
+                      className={`w-full p-2 border border-slate-200 rounded-lg text-xs font-medium ${
+                        formRefNumber ? 'bg-slate-50 text-slate-700 cursor-not-allowed' : 'bg-white text-slate-800'
+                      }`}
                       value={formCommodityId}
+                      disabled={!!formRefNumber}
                       onChange={e => setFormCommodityId(e.target.value)}
                       required
                     >
@@ -1700,7 +1764,13 @@ export default function QualityControlPage() {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold cursor-pointer shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5"
+                  disabled={!formRefNumber && !formPoId}
+                  title={!formRefNumber && !formPoId ? 'Please select a Purchase Order to create Quality Assessment' : ''}
+                  className={`px-5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-md ${
+                    (!formRefNumber && !formPoId)
+                      ? 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
+                      : 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-emerald-600/20'
+                  }`}
                 >
                   <Check size={14} />
                   <span>{editingQCId ? 'Update QC Record' : 'Save & Calculate QC'}</span>
