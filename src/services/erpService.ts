@@ -149,34 +149,64 @@ export const getDb = (): ErpDatabase => {
     return emptyDb;
   }
 
-  const stored = localStorage.getItem(DB_KEY);
-  if (!stored) {
-    recalculateStockTotals(emptyDb);
-    localStorage.setItem(DB_KEY, JSON.stringify(emptyDb));
+  try {
+    const stored = localStorage.getItem(DB_KEY);
+    if (!stored) {
+      recalculateStockTotals(emptyDb);
+      saveDb(emptyDb);
+      return emptyDb;
+    }
+    const db = JSON.parse(stored);
+    db.purchaseInvoices = db.purchaseInvoices || [];
+    db.purchaseEnquiries = db.purchaseEnquiries || [];
+    db.purchaseQuotations = db.purchaseQuotations || [];
+    db.purchaseOrders = db.purchaseOrders || [];
+    db.grns = db.grns || [];
+    db.qualityInspections = db.qualityInspections || [];
+    db.leads = db.leads || [];
+    db.salesReturns = db.salesReturns || [];
+    db.returnInspections = db.returnInspections || [];
+    db.creditNotes = db.creditNotes || [];
+    db.refunds = db.refunds || [];
+    db.salesTargets = db.salesTargets || [];
+    db.salesCommissions = db.salesCommissions || [];
+    recalculateStockTotals(db);
+    return db;
+  } catch (err) {
+    console.warn('Error reading db from localStorage, returning fresh empty DB', err);
     return emptyDb;
   }
-  const db = JSON.parse(stored);
-  db.purchaseInvoices = db.purchaseInvoices || [];
-  db.purchaseEnquiries = db.purchaseEnquiries || [];
-  db.purchaseQuotations = db.purchaseQuotations || [];
-  db.purchaseOrders = db.purchaseOrders || [];
-  db.grns = db.grns || [];
-  db.qualityInspections = db.qualityInspections || [];
-  db.leads = db.leads || [];
-  db.salesReturns = db.salesReturns || [];
-  db.returnInspections = db.returnInspections || [];
-  db.creditNotes = db.creditNotes || [];
-  db.refunds = db.refunds || [];
-  db.salesTargets = db.salesTargets || [];
-  db.salesCommissions = db.salesCommissions || [];
-  recalculateStockTotals(db);
-  return db;
+};
+
+const sanitizeForStorage = (obj: any): any => {
+  return JSON.parse(JSON.stringify(obj, (key, value) => {
+    // Strip giant base64 strings (> 2000 chars) from localStorage to stay far below the 5MB browser quota
+    if (typeof value === 'string' && value.startsWith('data:image/') && value.length > 2000) {
+      return '';
+    }
+    return value;
+  }));
 };
 
 export const saveDb = (db: ErpDatabase): void => {
   if (typeof window !== 'undefined') {
-    recalculateStockTotals(db);
-    localStorage.setItem(DB_KEY, JSON.stringify(db));
+    try {
+      recalculateStockTotals(db);
+      const safeDb = sanitizeForStorage(db);
+      localStorage.setItem(DB_KEY, JSON.stringify(safeDb));
+    } catch (err) {
+      console.warn('[LocalStorage Quota Exceeded, cleaning up old entries and saving]', err);
+      try {
+        // Deep strip all base64 and compress
+        const minDb = JSON.parse(JSON.stringify(db, (k, v) => {
+          if (typeof v === 'string' && v.startsWith('data:')) return '';
+          return v;
+        }));
+        localStorage.setItem(DB_KEY, JSON.stringify(minDb));
+      } catch (innerErr) {
+        console.error('Critical localStorage save failure', innerErr);
+      }
+    }
   }
 };
 
@@ -192,11 +222,16 @@ export const mapToBackend = (dbField: string, item: any): any => {
     payload.village = item.address || 'N/A';
     payload.district = 'Patna';
   } else if (dbField === 'commodities') {
-    payload.commodityCode = item.sku;
+    payload.commodityCode = item.sku || item.commodityCode || `CMD-${Date.now()}`;
+    payload.category = item.category || 'Grains';
+    payload.unit = item.unit || 'MT';
+    payload.hsn = item.hsn || '1001';
     payload.gstRate = item.defaultGst !== undefined ? item.defaultGst : 5;
     payload.purchasePrice = item.purchaseCost || 0;
     payload.sellingPrice = item.currentMarketPrice || 0;
     payload.minimumStock = item.minStockLevel || 10;
+    payload.qualityParameters = item.qualityParameters || item.qualitySpecs || [];
+    payload.qualityRebateRules = item.qualityRebateRules || [];
   } else if (dbField === 'vehicles') {
     payload.registrationNo = item.number;
     payload.owner = 'BrijRani Agro';
@@ -219,6 +254,8 @@ export const mapToFrontend = (dbField: string, backendItem: any): any => {
     item.currentMarketPrice = backendItem.sellingPrice || 0;
     item.minStockLevel = backendItem.minimumStock || 10;
     item.targetPrice = backendItem.targetPrice || Math.round((backendItem.sellingPrice || 0) * 1.15) || 25000;
+    item.qualityParameters = backendItem.qualityParameters || [];
+    item.qualitySpecs = backendItem.qualityParameters || [];
   } else if (dbField === 'vehicles') {
     item.number = backendItem.registrationNo || '';
   } else if (dbField === 'drivers') {
@@ -478,6 +515,9 @@ export const erpService = {
       rejectedQty: 0,
       weight: grnData.weight || totalReceivedQty,
       batchNo: grnData.batchNo || `BAT-${Date.now().toString().slice(-4)}`,
+      photos: grnData.photos || (grnData.attachment ? [grnData.attachment] : []),
+      attachments: grnData.attachments || grnData.photos || [],
+      attachment: grnData.attachment || (grnData.photos && grnData.photos[0]) || '',
       invoiceId: grnData.invoiceId,
       invoiceNo: grnData.invoiceNo,
       qcId: grnData.qcId,

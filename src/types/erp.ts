@@ -53,6 +53,23 @@ export interface Customer {
   creditLimit?: number;
 }
 
+export interface CommodityQualityParam {
+  name: string;
+  unit: string;
+  standardValue: number;
+  tolerance: number;
+  minLimit?: number;
+  maxLimit?: number;
+  direction?: 'HIGHER_IS_WORSE' | 'LOWER_IS_WORSE';
+  rebateRule?: {
+    rebateType: 'Standard Rebate' | 'Single Rebate' | 'Double Rebate' | 'All' | 'All Types';
+    calculationMethod: 'Discount' | 'Pro-Rata' | 'Both';
+    rebateBasis: 'Per % Deviation' | 'Flat Rate per MT' | 'Percentage of Base Rate' | 'Tiered Slabs';
+    rebateRate: number;
+    slabs?: RebateSlab[];
+  };
+}
+
 export interface Commodity {
   id: string;
   _id?: string;
@@ -68,6 +85,9 @@ export interface Commodity {
   stockQty: number; // Total available
   reservedQty: number; // Allocated to Sales Orders but not dispatched
   minStockLevel: number;
+  qualityParameters?: CommodityQualityParam[];
+  qualitySpecs?: CommodityQualityParam[];
+  qualityRebateRules?: any[];
 }
 
 export interface Warehouse {
@@ -301,6 +321,8 @@ export interface GRN {
   transporter?: string;
   remarks?: string;
   attachment?: string;
+  attachments?: string[];
+  photos?: string[];
   qualityStatus: 'Pending' | 'Passed' | 'Rejected' | 'Partially Passed' | 'On Hold';
   inwardStatus: 'Pending' | 'Completed';
   status: 'Draft' | 'Pending QC' | 'Completed' | 'Cancelled' | 'Accepted' | 'Rejected';

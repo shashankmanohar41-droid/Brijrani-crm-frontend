@@ -10,9 +10,10 @@ import api from '../../../services/axios';
 import { GRN, GRNItem, PurchaseOrder, QualityInspection } from '../../../types/erp';
 import { formatDate } from '../../../utils/dateUtils';
 import DataTable from '../../../components/shared/DataTable';
-import { FileText, Plus, Truck, FileCheck, ShieldAlert, Award, Compass, Scale, ClipboardCheck, Edit3, Download, Eye, Trash2, Wallet } from 'lucide-react';
+import { FileText, Plus, Truck, FileCheck, ShieldAlert, Award, Compass, Scale, ClipboardCheck, Edit3, Download, Eye, Trash2, Wallet, Camera, UploadCloud, Image as ImageIcon, X, ZoomIn, ExternalLink, Loader2, Sparkles } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import IndianDateInput from '../../../components/shared/IndianDateInput';
+import { uploadToCloudinary, resolveImageUrl, CLOUDINARY_CONFIG } from '../../../services/cloudinaryService';
 
 export default function GRNPage() {
   const searchParams = useSearchParams();
@@ -25,6 +26,11 @@ export default function GRNPage() {
   const [isViewMode, setIsViewMode] = useState(false);
   const [isQcOpen, setIsQcOpen] = useState(false);
   const [qcFilter, setQcFilter] = useState<string>('All');
+
+  // Photo Upload & Lightbox states
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
 
   // Form states for Header
   const [poId, setPoId] = useState('');
@@ -251,6 +257,33 @@ export default function GRNPage() {
     });
   };
 
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setIsUploading(true);
+    try {
+      const uploadedUrls: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const url = await uploadToCloudinary(file, CLOUDINARY_CONFIG.uploadFolder);
+        uploadedUrls.push(url);
+      }
+      setPhotos(prev => [...prev, ...uploadedUrls]);
+      showToast(`Uploaded ${uploadedUrls.length} photo(s) to Cloudinary successfully!`, 'success');
+    } catch (err: any) {
+      console.error('Photo upload error:', err);
+      showToast(err.message || 'Failed to upload photo to Cloudinary', 'error');
+    } finally {
+      setIsUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleRemovePhoto = (index: number) => {
+    setPhotos(prev => prev.filter((_, i) => i !== index));
+    showToast('Photo removed', 'info');
+  };
+
   const handleOpenEdit = () => {
     if (!selectedGRN) return;
     setPoId(selectedGRN.poId);
@@ -261,6 +294,7 @@ export default function GRNPage() {
     setTransporter(selectedGRN.transporter || '');
     setRemarks(selectedGRN.remarks || '');
     setItemsList(selectedGRN.items || []);
+    setPhotos(selectedGRN.photos || (selectedGRN.attachment ? [selectedGRN.attachment] : []));
     setIsEditMode(true);
     setIsViewMode(false);
     setIsCreateOpen(true);
@@ -276,6 +310,7 @@ export default function GRNPage() {
     setTransporter(selectedGRN.transporter || '');
     setRemarks(selectedGRN.remarks || '');
     setItemsList(selectedGRN.items || []);
+    setPhotos(selectedGRN.photos || (selectedGRN.attachment ? [selectedGRN.attachment] : []));
     setIsEditMode(false);
     setIsViewMode(true);
     setIsCreateOpen(true);
@@ -309,6 +344,9 @@ export default function GRNPage() {
         challanDate: challanDate || new Date().toISOString().split('T')[0],
         transporter,
         remarks,
+        photos,
+        attachments: photos,
+        attachment: photos[0] || selectedGRN.attachment || '',
         items: itemsList,
         receivedQty: itemsList.reduce((sum, i) => sum + i.receivedNow, 0)
       };
@@ -322,6 +360,7 @@ export default function GRNPage() {
       setChallanNo('');
       setTransporter('');
       setRemarks('');
+      setPhotos([]);
       setSelectedGRN(updatedGRN);
       showToast(`GRN ${selectedGRN.grnNo} updated successfully!`, 'success');
       return;
@@ -353,6 +392,9 @@ export default function GRNPage() {
       challanDate: challanDate || new Date().toISOString().split('T')[0],
       transporter,
       remarks,
+      photos,
+      attachments: photos,
+      attachment: photos[0] || '',
       items: itemsList
     });
 
@@ -365,6 +407,7 @@ export default function GRNPage() {
     setChallanNo('');
     setTransporter('');
     setRemarks('');
+    setPhotos([]);
     setSelectedGRN(grn);
     router.replace('/procurement/grn');
     showToast(`GRN ${grn.grnNo} recorded. Status: Pending Quality Inspection`, 'success');
@@ -374,6 +417,7 @@ export default function GRNPage() {
     setIsCreateOpen(false);
     setIsEditMode(false);
     setIsViewMode(false);
+    setPhotos([]);
     router.replace('/procurement/grn');
   };
 
@@ -651,6 +695,29 @@ export default function GRNPage() {
       }
     },
     { 
+      header: 'Photos & Slips', 
+      accessor: (row: GRN) => {
+        const photoList = row.photos || (row.attachment ? [row.attachment] : []);
+        if (photoList.length === 0) {
+          return <span className="text-slate-300 text-[10px] italic">No photos</span>;
+        }
+        return (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setPreviewImage(photoList[0]);
+            }}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 transition cursor-pointer shadow-2xs"
+            title="View Gate Photo"
+          >
+            <Camera size={11} />
+            <span>{photoList.length} {photoList.length === 1 ? 'Photo' : 'Photos'}</span>
+          </button>
+        );
+      }
+    },
+    { 
       header: 'Inward Status', 
       accessor: (row: GRN) => (
         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
@@ -900,6 +967,51 @@ export default function GRNPage() {
                 );
               })()}
 
+              {/* Gate Entry Photos & Cloudinary Attachments Gallery */}
+              {(() => {
+                const photoList = selectedGRN.photos || (selectedGRN.attachment ? [selectedGRN.attachment] : []);
+                if (photoList.length === 0) return null;
+                return (
+                  <div className="border border-indigo-100 bg-gradient-to-br from-indigo-50/50 to-slate-50/50 rounded-xl p-4 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-indigo-800 uppercase tracking-wider flex items-center gap-1.5">
+                        <Camera size={13} className="text-indigo-600" />
+                        <span>Gate Entry Photos & Slips</span>
+                      </span>
+                      <span className="text-[9px] font-bold text-indigo-700 bg-indigo-100/80 px-2 py-0.5 rounded-full border border-indigo-200">
+                        {photoList.length} {photoList.length === 1 ? 'Photo' : 'Photos'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      {photoList.map((pUrl, pIdx) => (
+                        <div
+                          key={pIdx}
+                          onClick={() => setPreviewImage(resolveImageUrl(pUrl))}
+                          className="relative group rounded-lg overflow-hidden border border-indigo-200 aspect-video bg-slate-900 cursor-pointer shadow-2xs hover:shadow-md transition"
+                        >
+                          <img
+                            src={resolveImageUrl(pUrl)}
+                            alt={`Gate Photo ${pIdx + 1}`}
+                            className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 24 24" fill="none" stroke="%2394a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>';
+                            }}
+                          />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-1">
+                            <ZoomIn size={14} className="text-white" />
+                            <span className="text-[9px] font-bold text-white">View</span>
+                          </div>
+                          <span className="absolute bottom-1 left-1 px-1 py-0.2 rounded text-[7px] font-bold bg-black/60 text-white">
+                            #{pIdx + 1}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Actions */}
               <div className="space-y-2 pt-4 border-t border-slate-100">
                 <div className="flex gap-2">
@@ -1130,6 +1242,113 @@ export default function GRNPage() {
                   </div>
                 </div>
               )}
+
+              {/* Gate Entry Photos & Attachments Upload Zone */}
+              <div className="border border-slate-200 bg-slate-50/50 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                      <Camera size={15} />
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-slate-800 block">Gate Entry Photos & Delivery Slips</span>
+                      <span className="text-[10px] text-slate-400 block font-medium">Capture incoming truck plate, weighbridge scale slip, and physical challan pictures.</span>
+                    </div>
+                  </div>
+                  {photos.length > 0 && (
+                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                      {photos.length} Attached
+                    </span>
+                  )}
+                </div>
+
+                {/* Category tag badges */}
+                <div className="flex flex-wrap gap-1.5 text-[10px]">
+                  <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-600 font-semibold shadow-2xs">🚚 Truck Gate Photo</span>
+                  <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-600 font-semibold shadow-2xs">⚖️ Weighbridge Scale Slip</span>
+                  <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-600 font-semibold shadow-2xs">📄 Supplier Challan Copy</span>
+                  <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-600 font-semibold shadow-2xs">🌾 Quality Lot Sample</span>
+                </div>
+
+                {/* Upload Dropzone / Button */}
+                {!isViewMode && (
+                  <div>
+                    <label className={`border-2 border-dashed rounded-xl p-3.5 flex flex-col items-center justify-center gap-1.5 cursor-pointer transition ${
+                      isUploading 
+                        ? 'border-indigo-400 bg-indigo-50/60 pointer-events-none' 
+                        : 'border-slate-200 hover:border-indigo-400 bg-white hover:bg-indigo-50/20'
+                    }`}>
+                      <input
+                        type="file"
+                        accept="image/*,.pdf"
+                        multiple
+                        onChange={handlePhotoUpload}
+                        className="hidden"
+                        disabled={isUploading}
+                      />
+                      {isUploading ? (
+                        <div className="flex items-center gap-2 text-xs font-bold text-indigo-700 py-1.5">
+                          <Loader2 size={16} className="animate-spin text-indigo-600" />
+                          <span>Uploading photo...</span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center text-center">
+                          <UploadCloud size={22} className="text-indigo-600 mb-0.5" />
+                          <span className="text-xs font-bold text-slate-800">Click or drag & drop to upload gate photos</span>
+                          <span className="text-[10px] text-slate-400">JPG, PNG, WEBP, PDF (Max 15MB)</span>
+                        </div>
+                      )}
+                    </label>
+                  </div>
+                )}
+
+                {/* Photo preview gallery */}
+                {photos.length > 0 ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
+                    {photos.map((imgUrl, pIdx) => (
+                      <div 
+                        key={pIdx} 
+                        className="relative group rounded-lg overflow-hidden border border-slate-200 bg-slate-900 aspect-video flex items-center justify-center shadow-2xs cursor-pointer"
+                        onClick={() => setPreviewImage(resolveImageUrl(imgUrl))}
+                      >
+                        <img 
+                          src={resolveImageUrl(imgUrl)} 
+                          alt={`GRN Photo ${pIdx + 1}`} 
+                          className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 24 24" fill="none" stroke="%2394a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>';
+                          }}
+                        />
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-2">
+                          <span className="p-1 rounded-full bg-white/30 text-white hover:bg-white/50 backdrop-blur-xs" title="Preview Photo">
+                            <ZoomIn size={13} />
+                          </span>
+                          {!isViewMode && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemovePhoto(pIdx);
+                              }}
+                              className="p-1 rounded-full bg-rose-600/90 text-white hover:bg-rose-700 transition"
+                              title="Remove Photo"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
+                        <span className="absolute bottom-1 left-1 px-1 py-0.2 rounded text-[7px] font-bold bg-black/70 text-white backdrop-blur-xs">
+                          Photo #{pIdx + 1}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : isViewMode && (
+                  <div className="text-center py-2.5 text-slate-400 text-xs italic bg-white rounded-lg border border-slate-100">
+                    No gate entry photos attached for this GRN.
+                  </div>
+                )}
+              </div>
 
               {/* Form submit */}
               <div className="flex gap-2 justify-end pt-3 border-t border-slate-100">
@@ -1476,6 +1695,65 @@ export default function GRNPage() {
                 )}
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Cloudinary Fullscreen Lightbox Modal */}
+      {previewImage && (
+        <div 
+          className="fixed inset-0 bg-black/80 backdrop-blur-md z-[99999] flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setPreviewImage(null)}
+        >
+          <div 
+            className="relative max-w-4xl w-full bg-slate-900 rounded-2xl overflow-hidden shadow-2xl border border-white/10 animate-zoom-in" 
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header controls */}
+            <div className="absolute top-3 right-3 flex items-center gap-2 z-10">
+              <a 
+                href={previewImage} 
+                target="_blank" 
+                rel="noreferrer"
+                className="p-2 rounded-full bg-white/20 text-white hover:bg-white/40 transition backdrop-blur-sm shadow-sm flex items-center justify-center"
+                title="Open original high-res image in new tab"
+              >
+                <ExternalLink size={16} />
+              </a>
+              <button 
+                onClick={() => setPreviewImage(null)}
+                className="p-2 rounded-full bg-white/20 text-white hover:bg-white/40 transition backdrop-blur-sm cursor-pointer shadow-sm flex items-center justify-center"
+                title="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Main Image */}
+            <div className="p-3 bg-black flex items-center justify-center min-h-[300px] max-h-[80vh] overflow-hidden">
+              <img 
+                src={resolveImageUrl(previewImage)} 
+                alt="GRN Gate Entry Attachment" 
+                className="max-h-[75vh] w-auto max-w-full object-contain rounded-lg"
+              />
+            </div>
+
+            {/* Footer details */}
+            <div className="px-5 py-3 bg-slate-950/90 text-xs text-slate-300 font-medium flex items-center justify-between border-t border-slate-800">
+              <span className="flex items-center gap-2 text-indigo-400 font-semibold">
+                <Camera size={14} />
+                <span>Gate Entry & Weighbridge Slip Document</span>
+              </span>
+              <a 
+                href={resolveImageUrl(previewImage)} 
+                target="_blank" 
+                rel="noreferrer" 
+                className="text-primary-400 hover:text-primary-300 hover:underline flex items-center gap-1 font-bold"
+              >
+                <span>Open Full Resolution</span>
+                <ExternalLink size={12} />
+              </a>
+            </div>
           </div>
         </div>
       )}
