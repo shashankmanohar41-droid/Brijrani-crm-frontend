@@ -266,13 +266,17 @@ export default function GRNPage() {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const url = await uploadToCloudinary(file, CLOUDINARY_CONFIG.uploadFolder);
-        uploadedUrls.push(url);
+        if (url) {
+          uploadedUrls.push(url);
+        }
       }
-      setPhotos(prev => [...prev, ...uploadedUrls]);
-      showToast(`Uploaded ${uploadedUrls.length} photo(s) to Cloudinary successfully!`, 'success');
+      if (uploadedUrls.length > 0) {
+        setPhotos(prev => [...prev, ...uploadedUrls]);
+        showToast(`Uploaded ${uploadedUrls.length} photo(s) successfully!`, 'success');
+      }
     } catch (err: any) {
       console.error('Photo upload error:', err);
-      showToast(err.message || 'Failed to upload photo to Cloudinary', 'error');
+      showToast(err.message || 'Failed to upload photo', 'error');
     } finally {
       setIsUploading(false);
       e.target.value = '';

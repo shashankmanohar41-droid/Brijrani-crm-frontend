@@ -1,15 +1,20 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  async rewrites() {
-    return [
+  images: {
+    remotePatterns: [
       {
-        source: '/uploads/:path*',
-        destination: 'http://localhost:5000/uploads/:path*',
+        protocol: 'https',
+        hostname: 'res.cloudinary.com',
       },
-    ];
+      {
+        protocol: 'https',
+        hostname: '**.vercel.app',
+      }
+    ],
   },
 };
 
 export default nextConfig;
+
 
