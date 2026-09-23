@@ -46,6 +46,8 @@ const round2 = (val: number): number => Math.round((val + Number.EPSILON) * 100)
 
 export function calculateQualityRebateFrontend(input: FrontendCalculationInput): FrontendCalculationOutput {
   const {
+    commodityId,
+    commodityName,
     quantity = 0,
     baseRate = 0,
     calculationMethod = 'Pro-Rata',
@@ -164,9 +166,26 @@ export function calculateQualityRebateFrontend(input: FrontendCalculationInput):
 
   for (const param of paramsToProcess) {
     const matchingRule = applicableRules.find(rule => {
-      const nameMatch = rule.parameterName?.toLowerCase() === param.parameterName?.toLowerCase();
+      // 1. Commodity matching
+      if (commodityId && rule.commodityId && String(rule.commodityId) !== String(commodityId)) {
+        if (!commodityName || !rule.commodityName || rule.commodityName.toLowerCase().trim() !== commodityName.toLowerCase().trim()) {
+          return false;
+        }
+      }
+      if (commodityName && rule.commodityName && rule.commodityName.toLowerCase().trim() !== commodityName.toLowerCase().trim()) {
+        if (!commodityId || !rule.commodityId || String(rule.commodityId) !== String(commodityId)) {
+          return false;
+        }
+      }
+
+      // 2. Parameter name matching
+      const nameMatch = rule.parameterName?.toLowerCase().trim() === param.parameterName?.toLowerCase().trim();
       if (!nameMatch) return false;
+
+      // 3. Status
       if (rule.status && rule.status !== 'Active') return false;
+
+      // 4. Validity dates
       if (rule.effectiveFrom) {
         const fromDate = new Date(rule.effectiveFrom);
         if (txDate < fromDate) return false;
@@ -183,8 +202,12 @@ export function calculateQualityRebateFrontend(input: FrontendCalculationInput):
       ruleIdsUsed.push(String(matchingRule._id || matchingRule.id));
     }
 
-    const standardValue = matchingRule ? Number(matchingRule.standardValue) : Number(param.standardValue ?? 0);
-    const tolerance = matchingRule ? Number(matchingRule.tolerance ?? 0) : Number(param.tolerance ?? 0);
+    const standardValue = param.standardValue !== undefined && param.standardValue !== null && !isNaN(Number(param.standardValue))
+      ? Number(param.standardValue)
+      : (matchingRule ? Number(matchingRule.standardValue) : 0);
+    const tolerance = param.tolerance !== undefined && param.tolerance !== null && !isNaN(Number(param.tolerance))
+      ? Number(param.tolerance)
+      : (matchingRule ? Number(matchingRule.tolerance ?? 0) : 0);
     const actualValue = Number(param.actualValue ?? 0);
     const unit = matchingRule?.unit || param.unit || '%';
 

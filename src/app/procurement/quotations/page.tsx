@@ -48,7 +48,17 @@ export default function PurchaseQuotationsPage() {
   const suppliers = db.suppliers;
   const farmers = db.farmers;
   const commodities = db.commodities;
-  const enquiries = db.purchaseEnquiries.filter(e => e.status === 'Approved' || e.status === 'RFQ Created');
+  const enquiries = useMemo(() => {
+    return (db.purchaseEnquiries || []).filter(e => {
+      const validStatus = e.status === 'Draft' || (e.status as string) === 'Approved';
+      if (!validStatus) return false;
+      // Exclude enquiries that already have an active quotation
+      const hasQuotation = db.purchaseQuotations.some(pq => 
+        (pq.enquiryNo === e.enquiryNo || (pq as any).referenceEnquiry === e.enquiryNo) && pq.status !== 'Rejected'
+      );
+      return !hasQuotation;
+    });
+  }, [db.purchaseEnquiries, db.purchaseQuotations]);
 
   // Load items from reference enquiry when selected
   useEffect(() => {

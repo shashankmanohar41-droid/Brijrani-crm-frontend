@@ -7,10 +7,10 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { useErp } from '../../../context/ErpContext';
 import { erpService, getDb } from '../../../services/erpService';
 import api from '../../../services/axios';
-import { GRN, GRNItem, PurchaseOrder, QualityInspection } from '../../../types/erp';
+import { GRN, GRNItem, PurchaseOrder, QualityInspection, PurchaseInvoice } from '../../../types/erp';
 import { formatDate } from '../../../utils/dateUtils';
 import DataTable from '../../../components/shared/DataTable';
-import { FileText, Plus, Truck, FileCheck, ShieldAlert, Award, Compass, Scale, ClipboardCheck, Edit3, Download, Eye, Trash2, Wallet, Camera, UploadCloud, Image as ImageIcon, X, ZoomIn, ExternalLink, Loader2, Sparkles } from 'lucide-react';
+import { FileText, Plus, Truck, FileCheck, ShieldAlert, Award, Compass, Scale, ClipboardCheck, Edit3, Download, Eye, Trash2, Wallet, Camera, UploadCloud, Image as ImageIcon, X, ZoomIn, ExternalLink, Loader2, Sparkles, Check } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import IndianDateInput from '../../../components/shared/IndianDateInput';
 import { uploadToCloudinary, resolveImageUrl, CLOUDINARY_CONFIG } from '../../../services/cloudinaryService';
@@ -57,6 +57,15 @@ export default function GRNPage() {
   const [qcNotes, setQcNotes] = useState('');
   const [qcItemsRates, setQcItemsRates] = useState<Record<string, { rejected: number; damaged: number }>>({});
   const [specs, setSpecs] = useState<any[]>([]);
+
+  // Payment after GRN states (Vendor Payment Workflow)
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [payAmount, setPayAmount] = useState<number>(0);
+  const [payDate, setPayDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [payMode, setPayMode] = useState<'Bank Transfer' | 'Cash' | 'Cheque' | 'UPI'>('Bank Transfer');
+  const [payAccount, setPayAccount] = useState<string>('HDFC Bank Main A/c');
+  const [payReference, setPayReference] = useState<string>('');
+  const [payNarration, setPayNarration] = useState<string>('');
 
   // Fetch quality specifications from Admin master
   useEffect(() => {
@@ -160,19 +169,46 @@ export default function GRNPage() {
     }
   }, [hasMandatoryBreach]);
 
-  const approvedPOs = db.purchaseOrders.filter(p => p.status === 'Approved' || p.status === 'Partially Received');
+  const approvedPOs = useMemo(() => {
+    return db.purchaseOrders.filter(p => {
+      const validStatus = p.status === 'Approved' || p.status === 'Partially Received';
+      if (!validStatus) return false;
+
+      // Allow linked PO if editing or viewing the existing GRN
+      if (selectedGRN && (selectedGRN.poId === p.id || selectedGRN.poNo === p.poNo)) {
+        return true;
+      }
+
+      // Exclude POs that already have an active (non-rejected) GRN
+      const hasActiveGRN = db.grns.some(g => 
+        (g.poId === p.id || g.poNo === p.poNo) && g.status !== 'Rejected'
+      );
+      if (hasActiveGRN) return false;
+
+      return true;
+    });
+  }, [db.purchaseOrders, db.grns, selectedGRN]);
+
   const warehouses = db.warehouses;
   const commodities = db.commodities;
   const suppliers = db.suppliers;
   const farmers = db.farmers;
 
-  // Find linked purchase invoices for selected PO
+  // Find linked purchase invoices for selected PO (exclude invoices already linked to another active GRN)
   const availableInvoices = useMemo(() => {
     if (!poId) return [];
     const po = db.purchaseOrders.find(p => p.id === poId || p.poNo === poId);
     if (!po) return [];
-    return db.purchaseInvoices.filter(i => i.poNumber === po.poNo || i.poNumber === po.id);
-  }, [poId, db.purchaseOrders, db.purchaseInvoices]);
+    return db.purchaseInvoices.filter(i => {
+      if (i.poNumber !== po.poNo && i.poNumber !== po.id) return false;
+      if (i.status === 'Cancelled') return false;
+      if (selectedGRN && (selectedGRN.invoiceNo === i.invoiceNo || selectedGRN.id === i.grnNumber)) {
+        return true;
+      }
+      const alreadyHasGRN = db.grns.some(g => (g.invoiceNo === i.invoiceNo || g.invoiceId === i.id) && g.status !== 'Rejected');
+      return !alreadyHasGRN;
+    });
+  }, [poId, db.purchaseOrders, db.purchaseInvoices, db.grns, selectedGRN]);
 
   useEffect(() => {
     if (availableInvoices.length > 0) {
@@ -529,6 +565,157 @@ export default function GRNPage() {
     } else {
       showToast(`Quality inspection certificate approved. GRN status updated to Passed.`, 'success');
     }
+  };
+
+  // Vendor Payout Handlers (Post-GRN Payment Flow)
+  const handleOpenPayVendorModal = () => {
+    if (!selectedGRN) return;
+    const inv = (selectedGRN.invoiceId || selectedGRN.invoiceNo)
+      ? db.purchaseInvoices.find(i => i.id === selectedGRN.invoiceId || i.invoiceNo === selectedGRN.invoiceNo)
+      : db.purchaseInvoices.find(i => i.poNumber === selectedGRN.poNo || i.grnNumber === selectedGRN.grnNo);
+
+    const po = db.purchaseOrders.find(p => p.id === selectedGRN.poId || p.poNo === selectedGRN.poNo);
+    const totalValuation = inv ? inv.grandTotal : (po ? (po.total || 0) : 0);
+    const paidVal = inv ? (inv.amountPaid || 0) : 0;
+    const due = Math.max(0, totalValuation - paidVal);
+
+    setPayAmount(due > 0 ? due : totalValuation);
+    setPayDate(new Date().toISOString().split('T')[0]);
+    setPayMode('Bank Transfer');
+    setPayAccount('HDFC Bank Main A/c');
+    setPayReference(`UTR-${Date.now().toString().slice(-6)}`);
+    setPayNarration(`Payment to vendor against GRN ${selectedGRN.grnNo} (PO Ref: ${selectedGRN.poNo})`);
+    setIsPaymentModalOpen(true);
+  };
+
+  const handleRecordVendorPayment = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedGRN || payAmount <= 0) {
+      showToast('Please enter a valid payment amount', 'error');
+      return;
+    }
+
+    const vendorName = selectedGRN.partyType === 'supplier'
+      ? suppliers.find(s => s.id === selectedGRN.partyId)?.name || 'Supplier'
+      : farmers.find(f => f.id === selectedGRN.partyId)?.name || 'Farmer';
+
+    let inv: PurchaseInvoice | undefined = (selectedGRN.invoiceId || selectedGRN.invoiceNo)
+      ? db.purchaseInvoices.find(i => i.id === selectedGRN.invoiceId || i.invoiceNo === selectedGRN.invoiceNo)
+      : db.purchaseInvoices.find(i => i.poNumber === selectedGRN.poNo || i.grnNumber === selectedGRN.grnNo);
+
+    // If no invoice existed yet, create a matching invoice so books and records reconcile
+    if (!inv) {
+      const newInvId = `INV-${Date.now()}`;
+      const newInvNo = `PINV-2026-${String(db.purchaseInvoices.length + 1).padStart(5, '0')}`;
+      const dateStr = new Date().toISOString().split('T')[0];
+      const itemsList = selectedGRN.items.map(item => ({
+        item: item.item,
+        poQty: item.orderedQty,
+        receivedQty: item.acceptedQuantity,
+        invoiceQty: item.acceptedQuantity,
+        rate: 25000,
+        baseRate: 25000,
+        qualityRebatePerUnit: 0,
+        qualityRebateTotal: 0,
+        settledRate: 25000,
+        discount: 0,
+        taxPercent: 5,
+        taxAmount: Math.round((item.acceptedQuantity * 25000) * 0.05),
+        amount: Math.round((item.acceptedQuantity * 25000) * 1.05)
+      }));
+
+      const grandTotal = itemsList.reduce((sum, i) => sum + i.amount, 0);
+
+      const createdInv: PurchaseInvoice = {
+        id: newInvId,
+        invoiceNo: newInvNo,
+        invoiceDate: dateStr,
+        supplierId: selectedGRN.partyId,
+        partyType: selectedGRN.partyType,
+        poNumber: selectedGRN.poNo,
+        grnNumber: selectedGRN.grnNo,
+        dueDate: dateStr,
+        paymentTerms: 'Immediate upon Inward',
+        taxType: 'GST',
+        subtotal: grandTotal * 0.95,
+        discount: 0,
+        cgst: Math.round((grandTotal * 0.05) / 2),
+        sgst: Math.round((grandTotal * 0.05) / 2),
+        igst: 0,
+        freight: 0,
+        otherCharges: 0,
+        roundOff: 0,
+        grandTotal: grandTotal,
+        status: 'Approved',
+        items: itemsList
+      };
+      erpService.purchaseInvoices.create(createdInv);
+      selectedGRN.invoiceId = createdInv.id;
+      selectedGRN.invoiceNo = createdInv.invoiceNo;
+      erpService.grns.update(selectedGRN);
+      inv = createdInv;
+    }
+
+    const currentPaid = inv.amountPaid || 0;
+    const newPaid = currentPaid + payAmount;
+    const remaining = Math.max(0, inv.grandTotal - newPaid);
+    const newStatus: 'Paid' | 'Partially Paid' = remaining === 0 ? 'Paid' : 'Partially Paid';
+
+    const newPaymentRecord = {
+      date: payDate,
+      reference: payReference,
+      mode: payMode,
+      account: payAccount,
+      amount: payAmount,
+      receiptNumber: `REC-${Date.now().toString().slice(-5)}`,
+      notes: payNarration
+    };
+
+    const updatedInvoice: PurchaseInvoice = {
+      ...inv,
+      amountPaid: newPaid,
+      remainingAmount: remaining,
+      status: newStatus,
+      paymentHistory: [...(inv.paymentHistory || []), newPaymentRecord]
+    };
+    erpService.purchaseInvoices.update(updatedInvoice);
+
+    // Deduct vendor account payable balance
+    if (selectedGRN.partyType === 'supplier') {
+      const sup = db.suppliers.find(s => s.id === selectedGRN.partyId);
+      if (sup) {
+        sup.balance = Math.max(0, sup.balance - payAmount);
+        erpService.suppliers.update(sup);
+      }
+    } else {
+      const farmer = db.farmers.find(f => f.id === selectedGRN.partyId);
+      if (farmer) {
+        farmer.balance = Math.max(0, farmer.balance - payAmount);
+        erpService.farmers.update(farmer);
+      }
+    }
+
+    // Post Payment Voucher to double-entry ledger (/finance/payments, /finance/ledger)
+    const vch = erpService.postVoucher({
+      voucherType: 'Payment',
+      date: payDate,
+      referenceNo: inv.invoiceNo,
+      partyId: selectedGRN.partyId,
+      partyType: selectedGRN.partyType,
+      amount: payAmount,
+      paymentMode: payMode as any,
+      cashBankLink: payAccount,
+      debitAccount: `${vendorName} Accounts Payable`,
+      creditAccount: payAccount,
+      narration: payNarration || `Payment to vendor for GRN ${selectedGRN.grnNo} / Invoice ${inv.invoiceNo}`
+    }, currentUserRole);
+
+    refreshDb();
+    setIsPaymentModalOpen(false);
+    const updatedGrn = getDb().grns.find(g => g.id === selectedGRN.id || g.grnNo === selectedGRN.grnNo);
+    if (updatedGrn) setSelectedGRN(updatedGrn);
+
+    showToast(`Payment voucher ${vch.voucherNo} of ₹${payAmount.toLocaleString()} posted to vendor ${vendorName}!`, 'success');
   };
 
   const handleDownloadPDF = (grn: GRN) => {
@@ -1061,20 +1248,43 @@ export default function GRNPage() {
                   </button>
                 )}
 
-                {selectedGRN.inwardStatus === 'Completed' && (
-                  <div className="space-y-2 mb-2">
-                    <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2.5 text-center text-[10px] text-emerald-800 font-semibold leading-normal">
-                      ✅ Material Inwarded & Stock Updated in Warehouse.
+                {selectedGRN.inwardStatus === 'Completed' && (() => {
+                  const inv = (selectedGRN.invoiceId || selectedGRN.invoiceNo)
+                    ? db.purchaseInvoices.find(i => i.id === selectedGRN.invoiceId || i.invoiceNo === selectedGRN.invoiceNo)
+                    : db.purchaseInvoices.find(i => i.poNumber === selectedGRN.poNo || i.grnNumber === selectedGRN.grnNo);
+                  const isPaid = inv?.status === 'Paid';
+
+                  return (
+                    <div className="space-y-2 mb-2">
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2.5 text-center text-[10px] text-emerald-800 font-semibold leading-normal">
+                        ✅ Material Inwarded & Stock Updated in Warehouse.
+                      </div>
+
+                      {!isPaid ? (
+                        <button
+                          onClick={handleOpenPayVendorModal}
+                          className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 cursor-pointer transition animate-none hover:scale-[1.01]"
+                        >
+                          <Wallet size={14} />
+                          <span>💰 Pay Vendor (Post Payment Voucher)</span>
+                        </button>
+                      ) : (
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-2.5 text-center text-xs font-bold text-blue-800 flex items-center justify-center gap-1.5">
+                          <Check size={14} className="text-blue-600" />
+                          <span>Vendor Paid in Full (Payment Complete)</span>
+                        </div>
+                      )}
+
+                      <button
+                        onClick={() => router.push('/procurement/invoices')}
+                        className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-[11px] flex items-center justify-center gap-1.5 border border-slate-200 cursor-pointer transition"
+                      >
+                        <FileCheck size={13} />
+                        <span>View Commercial Invoice</span>
+                      </button>
                     </div>
-                    <button
-                      onClick={() => router.push('/procurement/invoices')}
-                      className="w-full py-2.5 bg-primary-600 hover:bg-primary-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-primary-600/10 cursor-pointer transition"
-                    >
-                      <Wallet size={14} />
-                      <span>Proceed to Invoice Payment (Step 5)</span>
-                    </button>
-                  </div>
-                )}
+                  );
+                })()}
 
                 <button
                   onClick={() => handleDownloadPDF(selectedGRN)}
@@ -1761,6 +1971,174 @@ export default function GRNPage() {
           </div>
         </div>
       )}
+
+      {/* Vendor Payout Modal (Step 7: Post Payment to Vendor after GRN) */}
+      {isPaymentModalOpen && selectedGRN && (() => {
+        const vendorName = selectedGRN.partyType === 'supplier'
+          ? suppliers.find(s => s.id === selectedGRN.partyId)?.name || 'Supplier'
+          : farmers.find(f => f.id === selectedGRN.partyId)?.name || 'Farmer';
+
+        const inv = (selectedGRN.invoiceId || selectedGRN.invoiceNo)
+          ? db.purchaseInvoices.find(i => i.id === selectedGRN.invoiceId || i.invoiceNo === selectedGRN.invoiceNo)
+          : db.purchaseInvoices.find(i => i.poNumber === selectedGRN.poNo || i.grnNumber === selectedGRN.grnNo);
+
+        const po = db.purchaseOrders.find(p => p.id === selectedGRN.poId || p.poNo === selectedGRN.poNo);
+        const totalVal = inv ? inv.grandTotal : (po ? (po.total || 0) : 0);
+        const currentPaid = inv ? (inv.amountPaid || 0) : 0;
+        const dueVal = Math.max(0, totalVal - currentPaid);
+
+        return (
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+            <div className="w-full max-w-lg bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden animate-zoom-in">
+              <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-gradient-to-r from-emerald-50 to-slate-50">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                    <Wallet size={16} className="text-emerald-600" />
+                    <span>Pay Vendor (After GRN Inward)</span>
+                  </h3>
+                  <p className="text-[10px] text-slate-400 mt-0.5">Post payment voucher, reconcile accounts payable, and update invoice records.</p>
+                </div>
+                <button
+                  onClick={() => setIsPaymentModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-600 font-bold text-base cursor-pointer"
+                >
+                  &times;
+                </button>
+              </div>
+
+              <form onSubmit={handleRecordVendorPayment} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
+                {/* Vendor & Valuation Summary Card */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2 text-xs">
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-400 font-semibold">Vendor:</span>
+                    <span className="font-bold text-slate-800">{vendorName} ({selectedGRN.partyType === 'supplier' ? 'Commercial Supplier' : 'Farmer'})</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-400 font-semibold">GRN Reference:</span>
+                    <span className="font-bold text-primary-600">{selectedGRN.grnNo} (PO: {selectedGRN.poNo})</span>
+                  </div>
+                  {inv && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-400 font-semibold">Commercial Invoice:</span>
+                      <span className="font-mono font-bold text-slate-700">{inv.invoiceNo}</span>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-200/60 text-center">
+                    <div className="bg-white p-2 rounded-lg border border-slate-150">
+                      <span className="text-[9px] text-slate-400 uppercase font-bold block">Total Billed</span>
+                      <span className="font-extrabold text-slate-800">₹{totalVal.toLocaleString()}</span>
+                    </div>
+                    <div className="bg-white p-2 rounded-lg border border-slate-150">
+                      <span className="text-[9px] text-slate-400 uppercase font-bold block">Paid So Far</span>
+                      <span className="font-extrabold text-emerald-600">₹{currentPaid.toLocaleString()}</span>
+                    </div>
+                    <div className="bg-emerald-50 p-2 rounded-lg border border-emerald-200">
+                      <span className="text-[9px] text-emerald-700 uppercase font-bold block">Net Due</span>
+                      <span className="font-extrabold text-emerald-800">₹{dueVal.toLocaleString()}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Amount to Pay */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Payment Amount (₹) *</label>
+                    <input
+                      type="number"
+                      value={payAmount}
+                      onChange={e => setPayAmount(Math.max(1, Number(e.target.value)))}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 bg-white"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Payment Date *</label>
+                    <IndianDateInput
+                      value={payDate}
+                      onChange={val => setPayDate(val)}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-medium text-slate-700 bg-white"
+                      required
+                    />
+                  </div>
+                </div>
+
+                {/* Mode & Bank Link */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Payment Mode *</label>
+                    <select
+                      value={payMode}
+                      onChange={e => setPayMode(e.target.value as any)}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700"
+                    >
+                      <option value="Bank Transfer">Bank Transfer (NEFT/RTGS/IMPS)</option>
+                      <option value="UPI">UPI Payment</option>
+                      <option value="Cheque">Cheque</option>
+                      <option value="Cash">Cash Payout</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Bank / Cash Account *</label>
+                    <select
+                      value={payAccount}
+                      onChange={e => setPayAccount(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700"
+                    >
+                      <option value="HDFC Bank Main A/c">HDFC Bank Main A/c (0029-XXXX)</option>
+                      <option value="SBI Working Cap A/c">SBI Working Cap A/c (3381-XXXX)</option>
+                      <option value="ICICI Bank Oper A/c">ICICI Bank Oper A/c (1102-XXXX)</option>
+                      <option value="Cash in Hand">Cash in Hand</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* UTR Reference */}
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">UTR / Cheque / Transaction Ref *</label>
+                  <input
+                    type="text"
+                    value={payReference}
+                    onChange={e => setPayReference(e.target.value)}
+                    placeholder="e.g. UTR-HDFC-998231, CHQ-009182"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono text-slate-800 bg-white"
+                    required
+                  />
+                </div>
+
+                {/* Narration */}
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Narration / Payment Notes</label>
+                  <input
+                    type="text"
+                    value={payNarration}
+                    onChange={e => setPayNarration(e.target.value)}
+                    placeholder="e.g. Cleared payment after physical inward & scale check"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs text-slate-700 bg-white"
+                  />
+                </div>
+
+                {/* Form submit */}
+                <div className="flex gap-2 justify-end pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setIsPaymentModalOpen(false)}
+                    className="px-4 py-2 border border-slate-250 text-slate-500 hover:bg-slate-50 rounded-lg text-xs font-bold transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Check size={14} />
+                    <span>Confirm & Post Payment</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

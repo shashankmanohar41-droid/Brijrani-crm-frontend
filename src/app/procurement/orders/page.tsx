@@ -530,14 +530,24 @@ export default function PurchaseOrdersPage() {
             </button>
           )}
           {(row.status === 'Approved' || row.status === 'Partially Received' || row.status === 'Received') && (
-            <button
-              onClick={() => router.push(`/procurement/qc?action=new&po=${row.id}`)}
-              title={`Conduct Quality Inspection for ${row.poNo}`}
-              className="px-2 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 bg-pink-50 text-pink-700 hover:bg-pink-100 border border-pink-200 cursor-pointer transition"
-            >
-              <Scale size={11} className="text-pink-600" />
-              <span>QC</span>
-            </button>
+            <>
+              <button
+                onClick={() => router.push(`/procurement/invoices?action=new&po=${row.id}`)}
+                title={`Create Purchase Invoice for ${row.poNo}`}
+                className="px-2 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 cursor-pointer transition"
+              >
+                <FileCheck size={11} className="text-amber-600" />
+                <span>Invoice</span>
+              </button>
+              <button
+                onClick={() => router.push(`/procurement/qc?action=new&po=${row.id}`)}
+                title={`Conduct Quality Inspection for ${row.poNo}`}
+                className="px-2 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 bg-pink-50 text-pink-700 hover:bg-pink-100 border border-pink-200 cursor-pointer transition"
+              >
+                <Scale size={11} className="text-pink-600" />
+                <span>QC</span>
+              </button>
+            </>
           )}
         </div>
       )
@@ -791,46 +801,22 @@ export default function PurchaseOrdersPage() {
                   </button>
                 )}
 
-                {/* Sourcing Lifecycle Stages & Linked Documents Tracker (PO -> QC -> Invoice -> GRN -> Payment) */}
+                {/* Sourcing Lifecycle Stages & Linked Documents Tracker (PO -> Invoice -> QC -> GRN -> Returns) */}
                 {(selectedPO.status === 'Approved' || selectedPO.status === 'Partially Received' || selectedPO.status === 'Received') && (
                   <div className="bg-slate-50 border border-slate-100 rounded-xl p-3.5 space-y-2.5 text-xs">
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
                       Procurement Lifecycle Flow
                     </span>
-                    
-                    {/* Step 1: Quality Control (QC) */}
-                    <div className="flex items-center justify-between py-1 border-b border-slate-100">
-                      <div className="flex items-center gap-2">
-                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                          linkedQC && (linkedQC.status === 'Passed' || (linkedQC as any).decision === 'ACCEPT') 
-                            ? 'bg-emerald-500 text-white' 
-                            : 'bg-amber-100 text-amber-700'
-                        }`}>
-                          {linkedQC && (linkedQC.status === 'Passed' || (linkedQC as any).decision === 'ACCEPT') ? '✓' : '1'}
-                        </span>
-                        <span className="font-semibold text-slate-700">1. Quality Inspection (QC)</span>
-                      </div>
-                      {linkedQC ? (
-                        <button 
-                          onClick={() => router.push('/procurement/qc')} 
-                          className="text-primary-600 hover:underline font-bold text-[11px] cursor-pointer"
-                        >
-                          {linkedQC.qcNo || 'QC'} ({(linkedQC as any).decision || linkedQC.status})
-                        </button>
-                      ) : (
-                        <span className="text-amber-600 font-bold text-[11px]">Awaiting QC</span>
-                      )}
-                    </div>
 
-                    {/* Step 2: Purchase Invoice */}
+                    {/* Step 1: Purchase Invoice */}
                     <div className="flex items-center justify-between py-1 border-b border-slate-100">
                       <div className="flex items-center gap-2">
                         <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                          linkedInvoice ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-500'
+                          linkedInvoice ? 'bg-emerald-500 text-white' : 'bg-amber-100 text-amber-700'
                         }`}>
-                          {linkedInvoice ? '✓' : '2'}
+                          {linkedInvoice ? '✓' : '1'}
                         </span>
-                        <span className="font-semibold text-slate-700">2. Purchase Invoice</span>
+                        <span className="font-semibold text-slate-700">1. Purchase Invoice</span>
                       </div>
                       {linkedInvoice ? (
                         <button 
@@ -840,8 +826,32 @@ export default function PurchaseOrdersPage() {
                           {linkedInvoice.invoiceNo} ({linkedInvoice.status})
                         </button>
                       ) : (
-                        <span className="text-slate-400 text-[11px]">
-                          {linkedQC ? 'Ready for Invoice' : 'Awaiting QC'}
+                        <span className="text-amber-600 font-bold text-[11px]">Ready for Invoice</span>
+                      )}
+                    </div>
+                    
+                    {/* Step 2: Quality Control (QC) */}
+                    <div className="flex items-center justify-between py-1 border-b border-slate-100">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                          linkedQC && (linkedQC.status === 'Passed' || (linkedQC as any).decision === 'ACCEPT') 
+                            ? 'bg-emerald-500 text-white' 
+                            : 'bg-slate-200 text-slate-500'
+                        }`}>
+                          {linkedQC && (linkedQC.status === 'Passed' || (linkedQC as any).decision === 'ACCEPT') ? '✓' : '2'}
+                        </span>
+                        <span className="font-semibold text-slate-700">2. Quality Inspection (QC)</span>
+                      </div>
+                      {linkedQC ? (
+                        <button 
+                          onClick={() => router.push('/procurement/qc')} 
+                          className="text-primary-600 hover:underline font-bold text-[11px] cursor-pointer"
+                        >
+                          {linkedQC.qcNo || 'QC'} ({(linkedQC as any).decision || linkedQC.status})
+                        </button>
+                      ) : (
+                        <span className="text-slate-400 font-medium text-[11px]">
+                          {linkedInvoice ? 'Ready for QC' : 'Awaiting Invoice'}
                         </span>
                       )}
                     </div>
@@ -865,25 +875,25 @@ export default function PurchaseOrdersPage() {
                         </button>
                       ) : (
                         <span className="text-slate-400 text-[11px]">
-                          {linkedInvoice ? 'Ready for Inward' : 'Awaiting Invoice'}
+                          {linkedQC ? 'Ready for Inward' : 'Awaiting QC'}
                         </span>
                       )}
                     </div>
 
-                    {/* Step 4: Invoice Payment */}
+                    {/* Step 4: Purchase Return / Settlement */}
                     <div className="flex items-center justify-between py-1">
                       <div className="flex items-center gap-2">
                         <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                          linkedInvoice?.status === 'Paid' ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-500'
+                          linkedInvoice?.status === 'Paid' || linkedGRN ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-500'
                         }`}>
-                          {linkedInvoice?.status === 'Paid' ? '✓' : '4'}
+                          {linkedInvoice?.status === 'Paid' || linkedGRN ? '✓' : '4'}
                         </span>
-                        <span className="font-semibold text-slate-700">4. Payment Status</span>
+                        <span className="font-semibold text-slate-700">4. Settlement / Returns</span>
                       </div>
                       <span className={`text-[11px] font-semibold ${
                         linkedInvoice?.status === 'Paid' ? 'text-emerald-600 font-bold' : 'text-slate-400'
                       }`}>
-                        {linkedInvoice?.status === 'Paid' ? 'Paid (Closed)' : linkedInvoice ? `₹${(linkedInvoice.remainingAmount !== undefined ? linkedInvoice.remainingAmount : linkedInvoice.grandTotal).toLocaleString()} Due` : 'Awaiting Invoice'}
+                        {linkedInvoice?.status === 'Paid' ? 'Paid (Closed)' : linkedInvoice ? `₹${(linkedInvoice.remainingAmount !== undefined ? linkedInvoice.remainingAmount : linkedInvoice.grandTotal).toLocaleString()} Due` : 'Awaiting Inward'}
                       </span>
                     </div>
                   </div>
@@ -892,25 +902,25 @@ export default function PurchaseOrdersPage() {
                 {/* Intelligent Dynamic Next Step Action */}
                 {(selectedPO.status === 'Approved' || selectedPO.status === 'Partially Received') && (
                   <>
-                    {!linkedQC || (linkedQC.status !== 'Passed' && (linkedQC as any).decision !== 'ACCEPT') ? (
+                    {!linkedInvoice ? (
                       <button
-                        onClick={() => router.push(`/procurement/qc?action=new&po=${selectedPO.id}`)}
-                        className="w-full py-2.5 bg-pink-600 hover:bg-pink-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-pink-600/10 cursor-pointer transition"
-                      >
-                        <Scale size={14} />
-                        <span>Process Quality Inspection (QC - Step 1)</span>
-                      </button>
-                    ) : !linkedInvoice ? (
-                      <button
-                        onClick={() => router.push(`/procurement/invoices?action=new&po=${selectedPO.id}&qc=${linkedQC.id || linkedQC.qcNo}`)}
+                        onClick={() => router.push(`/procurement/invoices?action=new&po=${selectedPO.id}`)}
                         className="w-full py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-amber-600/10 cursor-pointer transition"
                       >
                         <FileCheck size={14} />
-                        <span>Create Purchase Invoice (Step 2)</span>
+                        <span>Create Purchase Invoice (Step 1)</span>
+                      </button>
+                    ) : !linkedQC || (linkedQC.status !== 'Passed' && (linkedQC as any).decision !== 'ACCEPT') ? (
+                      <button
+                        onClick={() => router.push(`/procurement/qc?action=new&po=${selectedPO.id}&invoice=${linkedInvoice.id}`)}
+                        className="w-full py-2.5 bg-pink-600 hover:bg-pink-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-pink-600/10 cursor-pointer transition"
+                      >
+                        <Scale size={14} />
+                        <span>Process Quality Inspection (QC - Step 2)</span>
                       </button>
                     ) : !linkedGRN ? (
                       <button
-                        onClick={() => router.push(`/procurement/grn?action=new&po=${selectedPO.id}&invoice=${linkedInvoice.id}`)}
+                        onClick={() => router.push(`/procurement/grn?action=new&po=${selectedPO.id}&invoice=${linkedInvoice.id}&qc=${linkedQC?.id || linkedQC?.qcNo}`)}
                         className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/10 cursor-pointer transition"
                       >
                         <Truck size={14} />
@@ -922,7 +932,7 @@ export default function PurchaseOrdersPage() {
                         className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/10 cursor-pointer transition"
                       >
                         <FileCheck size={14} />
-                        <span>Record Invoice Payment (Final Step)</span>
+                        <span>Record Vendor Payment (Post-GRN Step)</span>
                       </button>
                     ) : null}
                   </>

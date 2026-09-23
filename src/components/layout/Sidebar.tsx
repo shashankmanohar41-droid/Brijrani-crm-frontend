@@ -51,8 +51,8 @@ export default function Sidebar() {
         { name: 'Purchase Enquiry', href: '/procurement/enquiries' },
         { name: 'Quotations', href: '/procurement/quotations' },
         { name: 'Purchase Orders', href: '/procurement/orders' },
-        { name: 'Quality Control', href: '/procurement/qc' },
         { name: 'Purchase Invoices', href: '/procurement/invoices' },
+        { name: 'Quality Control', href: '/procurement/qc' },
         { name: 'GRN (Inward Slips)', href: '/procurement/grn' },
         { name: 'Purchase Returns', href: '/procurement/returns' },
       ]
@@ -62,18 +62,14 @@ export default function Sidebar() {
       name: 'Sales',
       icon: ClipboardList,
       subItems: [
-        { name: 'Sales Dashboard', href: '/sales/dashboard' },
-        { name: 'CRM Leads', href: '/sales/leads' },
+        { name: 'Overview Dashboard', href: '/sales/dashboard' },
         { name: 'Sales Enquiry', href: '/sales/enquiries' },
-        { name: 'Sales Quotations', href: '/sales/quotations' },
+        { name: 'Quotations', href: '/sales/quotations' },
         { name: 'Sales Orders', href: '/sales/orders' },
-        { name: 'Picking', href: '/sales/picking' },
-        { name: 'Packing Slips', href: '/sales/packing' },
-        { name: 'Delivery Challans', href: '/sales/delivery-challans' },
         { name: 'Sales Invoices', href: '/sales/invoices' },
-        { name: 'Returns & QC', href: '/sales/returns' },
-        { name: 'Targets & Quotas', href: '/sales/targets' },
-        { name: 'Reports & Statements', href: '/sales/reports' },
+        { name: 'Quality Control', href: '/sales/qc' },
+        { name: 'GRN (Outward Slips)', href: '/sales/delivery-challans' },
+        { name: 'Sales Returns', href: '/sales/returns' },
       ]
     }] : []),
 

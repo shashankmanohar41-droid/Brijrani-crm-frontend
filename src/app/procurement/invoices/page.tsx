@@ -10,7 +10,7 @@ import api from '../../../services/axios';
 import { PurchaseInvoice, PurchaseInvoiceItem, PurchaseOrder, GRN } from '../../../types/erp';
 import { formatDate } from '../../../utils/dateUtils';
 import DataTable from '../../../components/shared/DataTable';
-import { FileText, Plus, Landmark, CheckCircle, AlertTriangle, HelpCircle, Download, FileCheck, ArrowRight, ShieldCheck, Edit3, Wallet, Eye, Trash2, Truck, FlaskConical } from 'lucide-react';
+import { FileText, Plus, Landmark, CheckCircle, AlertTriangle, HelpCircle, Download, FileCheck, ArrowRight, ShieldCheck, Edit3, Wallet, Eye, Trash2, Truck, FlaskConical, Clock, Lock } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import IndianDateInput from '../../../components/shared/IndianDateInput';
 
@@ -62,14 +62,49 @@ export default function PurchaseInvoicesPage() {
     }).catch(() => null);
   }, []);
 
-  // Filters POs and GRNs for selector (Include Approved, Sent, Partially Received, and Received)
-  const availablePOs = db.purchaseOrders.filter(p => p.status === 'Approved' || p.status === 'Sent' || p.status === 'Partially Received' || p.status === 'Received');
+  // Filters POs and GRNs for selector (Exclude already invoiced/completed POs & GRNs)
+  const availablePOs = useMemo(() => {
+    return db.purchaseOrders.filter(p => {
+      const validStatus = p.status === 'Approved' || p.status === 'Sent' || p.status === 'Partially Received' || p.status === 'Received';
+      if (!validStatus) return false;
+
+      // Allow linked PO if editing or viewing the existing invoice
+      if (selectedInvoice && (selectedInvoice.poNumber === p.poNo || selectedInvoice.poNumber === p.id)) {
+        return true;
+      }
+
+      // Exclude POs that already have an active (non-cancelled) Purchase Invoice
+      const hasActiveInvoice = db.purchaseInvoices.some(inv => 
+        (inv.poNumber === p.poNo || inv.poNumber === p.id) && inv.status !== 'Cancelled'
+      );
+      if (hasActiveInvoice) return false;
+
+      return true;
+    });
+  }, [db.purchaseOrders, db.purchaseInvoices, selectedInvoice]);
+
   const availableGRNs = useMemo(() => {
     if (!poNo) return [];
     const po = db.purchaseOrders.find(p => p.poNo === poNo || p.id === poNo);
     if (!po) return [];
-    return db.grns.filter(g => (g.poId === po.id || g.poNo === po.poNo) && g.qualityStatus !== 'Pending');
-  }, [poNo, db.purchaseOrders, db.grns]);
+    return db.grns.filter(g => {
+      if (g.poId !== po.id && g.poNo !== po.poNo) return false;
+      if (g.qualityStatus === 'Pending') return false;
+
+      // If editing/viewing, allow the currently linked GRN
+      if (selectedInvoice && (selectedInvoice.grnNumber === g.grnNo || selectedInvoice.grnNumber === g.id)) {
+        return true;
+      }
+
+      // Exclude GRNs that already have an active invoice
+      const hasActiveInvoice = db.purchaseInvoices.some(inv => 
+        (inv.grnNumber === g.grnNo || inv.grnNumber === g.id) && inv.status !== 'Cancelled'
+      );
+      if (hasActiveInvoice) return false;
+
+      return true;
+    });
+  }, [poNo, db.purchaseOrders, db.grns, db.purchaseInvoices, selectedInvoice]);
 
   // Helper to populate items directly from QC (Auto Quality Rebate Deduction)
   const populateItemsFromQC = (qc: any) => {
@@ -129,10 +164,8 @@ export default function PurchaseInvoicesPage() {
   };
 
   // Helper to populate items directly from PO
-  const populateItemsFromPo = (po: PurchaseOrder, selectedGrnNo: string = '') => {
-    const grn = selectedGrnNo ? db.grns.find(g => g.grnNo === selectedGrnNo) : null;
+  const populateItemsFromPo = (po: PurchaseOrder) => {
     const invoiceItems: PurchaseInvoiceItem[] = (po.items || []).map(poItem => {
-      const grnItem = grn?.items?.find(i => i.item === poItem.item || String(i.item) === String(poItem.item));
       const rate = poItem.rate || 0;
       const discountAmt = poItem.discount || 0;
       const commodity = db.commodities.find(c => 
@@ -149,15 +182,14 @@ export default function PurchaseInvoicesPage() {
         taxRate = Number(poItem.taxPercent);
       }
 
-      const receivedQty = grnItem ? grnItem.acceptedQuantity : 0;
-      const invoiceQty = grnItem ? grnItem.acceptedQuantity : poItem.quantity;
+      const invoiceQty = poItem.quantity;
       const sub = invoiceQty * rate;
       const taxVal = Math.round(sub * (taxRate / 100));
 
       return {
         item: poItem.item,
         poQty: poItem.quantity,
-        receivedQty,
+        receivedQty: poItem.quantity,
         invoiceQty,
         rate,
         baseRate: rate,
@@ -182,21 +214,13 @@ export default function PurchaseInvoicesPage() {
   const handlePoChange = (selectedPoNo: string) => {
     setPoNo(selectedPoNo);
     setGrnNo('');
+    setQcId('');
+    setQcNo('');
     const po = db.purchaseOrders.find(p => p.poNo === selectedPoNo || p.id === selectedPoNo);
     if (po) {
-      populateItemsFromPo(po, '');
-      const qc = db.qualityInspections.find(q => q.poId === po.id || q.poNo === po.poNo || q.grnNo === `LOT-${po.poNo}`);
-      if (qc) {
-        setQcId(qc.id);
-        setQcNo(qc.qcNo || '');
-      } else {
-        setQcId('');
-        setQcNo('');
-      }
+      populateItemsFromPo(po);
     } else {
       setItemsList([]);
-      setQcId('');
-      setQcNo('');
     }
   };
 
@@ -205,7 +229,7 @@ export default function PurchaseInvoicesPage() {
     setGrnNo(selectedGrnNo);
     const po = db.purchaseOrders.find(p => p.poNo === poNo || p.id === poNo);
     if (po) {
-      populateItemsFromPo(po, selectedGrnNo);
+      populateItemsFromPo(po);
     }
   };
 
@@ -232,7 +256,7 @@ export default function PurchaseInvoicesPage() {
       if (po) {
         setPoNo(po.poNo);
         setGrnNo('');
-        populateItemsFromPo(po, '');
+        populateItemsFromPo(po);
         setIsCreateOpen(true);
       }
     } else if (actionQueryParam === 'new') {
@@ -436,10 +460,9 @@ export default function PurchaseInvoicesPage() {
     setPoNo('');
     setQcId('');
     setQcNo('');
-    setGrnNo('');
     setItemsList([]);
     setSelectedInvoice(newInvoice);
-    showToast(`Invoice ${invoiceNo} logged as ${newInvoice.status} according to QC settlement!`, 'success');
+    showToast(`Purchase Invoice ${invoiceNo} generated directly from Purchase Order ${poNumber}!`, 'success');
   };
 
   // Accountant Actions
@@ -590,6 +613,22 @@ export default function PurchaseInvoicesPage() {
     return erpService.verifyThreeWayMatch(selectedInvoice);
   }, [selectedInvoice, db]);
 
+  // Find linked GRN record if any exists
+  const linkedGrn = useMemo(() => {
+    if (!selectedInvoice) return null;
+    return db.grns.find(g => 
+      (selectedInvoice.grnNumber && g.grnNo === selectedInvoice.grnNumber) || 
+      (selectedInvoice.id && g.invoiceId === selectedInvoice.id) ||
+      (selectedInvoice.invoiceNo && g.invoiceNo === selectedInvoice.invoiceNo) ||
+      (selectedInvoice.poNumber && g.poNo === selectedInvoice.poNumber)
+    ) || null;
+  }, [selectedInvoice, db.grns]);
+
+  const isGrnInwarded = useMemo(() => {
+    if (!linkedGrn) return false;
+    return linkedGrn.inwardStatus === 'Completed' || linkedGrn.status === 'Completed' || linkedGrn.status === 'Accepted';
+  }, [linkedGrn]);
+
   // Tab filter logic
   const filteredInvoices = useMemo(() => {
     if (activeTab === 'All') return db.purchaseInvoices;
@@ -608,31 +647,43 @@ export default function PurchaseInvoicesPage() {
       }
     },
     { 
-      header: 'PO / QC Ref', 
+      header: 'Purchase Order (PO)', 
       accessor: (row: PurchaseInvoice) => (
-        <div className="flex flex-col gap-0.5">
-          <span className="font-mono text-xs font-semibold text-slate-700">{row.poNumber || '-'}</span>
-          {row.qcNumber && (
-            <span className="inline-flex items-center gap-1 font-mono text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 py-0.2 rounded w-fit">
-              <FlaskConical size={9} /> {row.qcNumber}
-            </span>
-          )}
-        </div>
+        <span className="font-mono text-xs font-bold text-slate-800">{row.poNumber || '-'}</span>
       )
     },
-    { header: 'GRN Ref', accessor: 'grnNumber' as keyof PurchaseInvoice },
     { 
-      header: 'QC Rebate Deduction', 
-      accessor: (row: PurchaseInvoice) => (
-        row.qualityRebateDeduction && row.qualityRebateDeduction > 0 ? (
-          <div className="flex flex-col">
-            <span className="font-extrabold text-xs text-rose-600">-₹{row.qualityRebateDeduction.toLocaleString()}</span>
-            <span className="text-[9px] text-slate-400 font-semibold">Quality rebate</span>
-          </div>
-        ) : (
-          <span className="text-slate-400 text-xs">₹0</span>
-        )
-      )
+      header: 'GRN Status', 
+      accessor: (row: PurchaseInvoice) => {
+        const grn = db.grns.find(g => 
+          (row.grnNumber && g.grnNo === row.grnNumber) || 
+          g.poNo === row.poNumber || 
+          g.invoiceId === row.id || 
+          g.invoiceNo === row.invoiceNo
+        );
+        if (!grn) {
+          return (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 inline-flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+              Awaiting GRN
+            </span>
+          );
+        }
+        if (grn.inwardStatus === 'Completed' || grn.status === 'Completed' || grn.status === 'Accepted') {
+          return (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 inline-flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+              GRN Inwarded
+            </span>
+          );
+        }
+        return (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200 inline-flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+            GRN In-Progress
+          </span>
+        );
+      }
     },
     { header: 'Grand Total', accessor: (row: PurchaseInvoice) => `₹${(row.grandTotal ?? 0).toLocaleString()}` },
     { header: 'Due Date', accessor: 'dueDate' as keyof PurchaseInvoice },
@@ -788,8 +839,8 @@ export default function PurchaseInvoicesPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-800">Purchase Invoices (3-Way Matching & QC Settlement)</h1>
-          <p className="text-xs font-medium text-slate-400">Log supplier invoices according to laboratory QC inspection slips, deduct quality rebates, and run 3-way match audits.</p>
+          <h1 className="text-xl font-bold tracking-tight text-slate-800">Purchase Invoices (From Purchase Orders)</h1>
+          <p className="text-xs font-medium text-slate-400">Log commercial supplier invoices directly against approved Purchase Orders (PO) and record vendor payments.</p>
         </div>
         <button
           onClick={() => {
@@ -993,7 +1044,15 @@ export default function PurchaseInvoicesPage() {
               {/* Payment Summary */}
               {['Approved', 'Partially Paid', 'Paid'].includes(selectedInvoice.status) && (
                 <div className="border border-slate-150 rounded-xl p-4 bg-slate-50/50 space-y-2 text-xs font-semibold text-slate-700">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Payment Status</span>
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Payment Status</span>
+                    <span className={`px-2 py-0.2 rounded text-[9px] font-bold ${
+                      selectedInvoice.status === 'Paid' ? 'bg-emerald-100 text-emerald-800' :
+                      selectedInvoice.status === 'Partially Paid' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'
+                    }`}>
+                      {selectedInvoice.status === 'Paid' ? 'Fully Settled' : selectedInvoice.status === 'Partially Paid' ? 'Partially Paid' : 'Pending Payment'}
+                    </span>
+                  </div>
                   <div className="flex justify-between">
                     <span>Total Invoice Amount:</span>
                     <span className="text-slate-800">₹{(selectedInvoice.grandTotal ?? 0).toLocaleString()}</span>
@@ -1058,21 +1117,29 @@ export default function PurchaseInvoicesPage() {
                     <span>Edit Invoice</span>
                   </button>
                 )}
-                {['Approved', 'Partially Paid'].includes(selectedInvoice.status) && (
+
+                {/* Payment Action */}
+                {selectedInvoice.status !== 'Paid' ? (
                   <button
                     onClick={() => {
                       const remaining = selectedInvoice.remainingAmount !== undefined ? selectedInvoice.remainingAmount : selectedInvoice.grandTotal;
                       setPaymentAmount(remaining);
                       setIsPaymentModalOpen(true);
                     }}
-                    className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/10 cursor-pointer transition mb-2"
+                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/10 cursor-pointer transition mb-2"
                   >
                     <Wallet size={14} />
-                    <span>Record Invoice Payment</span>
+                    <span>Record Vendor Payment</span>
                   </button>
+                ) : (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2.5 text-center text-xs font-bold text-emerald-800 flex items-center justify-center gap-1.5 mb-2">
+                    <CheckCircle size={14} className="text-emerald-600" />
+                    <span>Vendor Paid in Full</span>
+                  </div>
                 )}
+
                 {(selectedInvoice.status === 'Matched' || selectedInvoice.status === 'Mismatch' || selectedInvoice.status === 'Disputed') && currentUserRole === 'Super Admin' && (
-                  <div className="flex gap-2 animate-fade-in">
+                  <div className="flex gap-2 animate-fade-in pt-1">
                     <button
                       onClick={handleApproveInvoice}
                       className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1 cursor-pointer transition shadow-md shadow-emerald-600/10"
@@ -1089,16 +1156,6 @@ export default function PurchaseInvoicesPage() {
                       </button>
                     )}
                   </div>
-                )}
-
-                {!selectedInvoice.grnNumber && (
-                  <button
-                    onClick={() => router.push(`/procurement/grn?action=new&po=${selectedInvoice.poNumber}&invoice=${selectedInvoice.id}`)}
-                    className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/10 cursor-pointer transition"
-                  >
-                    <Truck size={14} />
-                    <span>Record Gate Receipt (GRN - Next Step)</span>
-                  </button>
                 )}
 
                 <button
@@ -1125,19 +1182,38 @@ export default function PurchaseInvoicesPage() {
           <div className="w-full max-w-2xl bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden animate-zoom-in">
             <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
               <div>
-                <h3 className="text-sm font-semibold text-slate-800">{isEditMode ? `Edit Supplier Invoice: ${selectedInvoice?.invoiceNo}` : isViewMode ? `View Supplier Invoice: ${selectedInvoice?.invoiceNo}` : 'Process Supplier Billing Invoice (According to QC)'}</h3>
-                <p className="text-[10px] text-slate-400 mt-0.5">{isEditMode ? 'Modify billing parameters received from supplier invoice.' : isViewMode ? 'Detailed view of the billing invoice.' : 'Select QC inspection slip or PO to auto-populate lab quality rebates and settle accounts payable.'}</p>
+                <h3 className="text-sm font-semibold text-slate-800">{isEditMode ? `Edit Supplier Invoice: ${selectedInvoice?.invoiceNo}` : isViewMode ? `View Supplier Invoice: ${selectedInvoice?.invoiceNo}` : 'Process Supplier Billing Invoice (From Purchase Order)'}</h3>
+                <p className="text-[10px] text-slate-400 mt-0.5">{isEditMode ? 'Modify billing parameters received from supplier invoice.' : isViewMode ? 'Detailed view of the billing invoice.' : 'Select Purchase Order (PO) to auto-populate items, quantities, rates, and register vendor billing.'}</p>
               </div>
               <button onClick={() => { setIsCreateOpen(false); setIsEditMode(false); setIsViewMode(false); }} className="text-slate-400 hover:text-slate-600 font-bold">&times;</button>
             </div>
 
             <form onSubmit={handleCreateInvoice} className="p-6 space-y-4 max-h-[78vh] overflow-y-auto">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="col-span-2 sm:col-span-1">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Supplier Invoice No *</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block mb-1">Purchase Order (PO) *</label>
+                  <select
+                    value={poNo}
+                    onChange={e => handlePoChange(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                    disabled={isViewMode}
+                    required
+                  >
+                    <option value="">Select Purchase Order</option>
+                    {availablePOs.map(po => {
+                      const partyName = po.partyType === 'supplier' ? suppliers.find(s => s.id === po.partyId)?.name : farmers.find(f => f.id === po.partyId)?.name;
+                      return (
+                        <option key={po.id} value={po.poNo}>{po.poNo} - {partyName || 'Vendor'} (₹{(po.total || 0).toLocaleString()})</option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block mb-1">Supplier Invoice No *</label>
                   <input
                     type="text"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-primary-500"
                     value={invoiceNo}
                     onChange={e => setInvoiceNo(e.target.value)}
                     placeholder="e.g. INV-4589"
@@ -1145,84 +1221,7 @@ export default function PurchaseInvoicesPage() {
                     disabled={isViewMode}
                   />
                 </div>
-
-                <div className="col-span-2 sm:col-span-1">
-                  <label className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block mb-1 flex items-center gap-1">
-                    <FlaskConical size={11} /> QC Inspection Slip
-                  </label>
-                  <select
-                    value={qcId}
-                    onChange={e => handleQcChange(e.target.value)}
-                    className="w-full px-3 py-2 border border-emerald-300 bg-emerald-50/20 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none"
-                    disabled={isViewMode}
-                  >
-                    <option value="">Direct / Select QC</option>
-                    {qcList.map((q: any) => (
-                      <option key={q._id || q.id} value={q._id || q.id}>
-                        {q.qcNumber} - {q.commodityName || 'Cargo'} ({q.quantity} {q.unit || 'MT'})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="col-span-2 sm:col-span-1">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Purchase Order (PO)</label>
-                  <select
-                    value={poNo}
-                    onChange={e => handlePoChange(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none"
-                    disabled={isViewMode}
-                  >
-                    <option value="">Select PO</option>
-                    {availablePOs.map(po => (
-                      <option key={po.id} value={po.poNo}>{po.poNo} - {po.partyType === 'supplier' ? suppliers.find(s => s.id === po.partyId)?.name : farmers.find(f => f.id === po.partyId)?.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="col-span-2 sm:col-span-1">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                    Inward GRN <span className="text-[9px] text-slate-400 font-normal lowercase">(optional)</span>
-                  </label>
-                  <select
-                    value={grnNo}
-                    onChange={e => handleGrnChange(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none"
-                    disabled={isViewMode}
-                  >
-                    <option value="">No GRN link</option>
-                    {availableGRNs.map(g => (
-                      <option key={g.id} value={g.grnNo}>{g.grnNo} (Accepted: {g.acceptedQty} MT)</option>
-                    ))}
-                  </select>
-                </div>
               </div>
-
-              {/* Active QC Banner */}
-              {(qcId || qcNo || activeQc) && (
-                <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-amber-50 border border-emerald-200 rounded-xl p-3.5 flex items-center justify-between text-xs animate-fade-in shadow-xs">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold shadow-xs">
-                      <FlaskConical size={16} />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-extrabold text-slate-800">Quality Inspection Slip: {qcNo || activeQc?.qcNumber}</span>
-                        <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                          QC Settle Applied
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        Commodity: <strong className="text-slate-700">{activeQc?.commodityName || itemsList[0]?.item || 'Grain'}</strong> | Base: <strong className="text-slate-700">₹{itemsList[0]?.baseRate || activeQc?.baseRate || 0}/MT</strong> | QC Rebate: <strong className="text-rose-600">-₹{itemsList[0]?.qualityRebatePerUnit || activeQc?.totalRebate || 0}/MT</strong> | Net Settled Rate: <strong className="text-emerald-700 font-bold">₹{itemsList[0]?.settledRate || itemsList[0]?.rate || 0}/MT</strong>
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block">Total Quality Deduction</span>
-                    <span className="text-sm font-extrabold text-rose-600">-₹{totalQualityRebateDeduction.toLocaleString()}</span>
-                  </div>
-                </div>
-              )}
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
@@ -1411,8 +1410,8 @@ export default function PurchaseInvoicesPage() {
           <div className="w-full max-w-md bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden animate-zoom-in">
             <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
               <div>
-                <h3 className="text-sm font-semibold text-slate-800">Record Outgoing Payment</h3>
-                <p className="text-[10px] text-slate-400 mt-0.5">Log voucher payment against invoice {selectedInvoice.invoiceNo}.</p>
+                <h3 className="text-sm font-semibold text-slate-800">Record Outgoing Vendor Payment (After GRN Inward)</h3>
+                <p className="text-[10px] text-slate-400 mt-0.5">Log voucher payment against invoice {selectedInvoice.invoiceNo} (GRN Ref: {linkedGrn?.grnNo || selectedInvoice.grnNumber || 'Verified'}).</p>
               </div>
               <button onClick={() => setIsPaymentModalOpen(false)} className="text-slate-400 hover:text-slate-600 font-bold">&times;</button>
             </div>

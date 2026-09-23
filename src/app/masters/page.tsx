@@ -9,12 +9,13 @@ import { erpService } from '../../services/erpService';
 import api from '../../services/axios';
 import DataTable from '../../components/shared/DataTable';
 import IndianDateInput from '../../components/shared/IndianDateInput';
+import { gstService } from '../../services/gstService';
 import {
   Plus, Database, UserCheck, ShieldAlert, CheckCircle, Trash2, Edit3, Eye, X,
   Building2, Phone, Mail, MapPin, CreditCard, Landmark, FlaskConical, Settings,
   Copy, Check, AlertCircle, Sparkles, Scale, Layers, Filter, Percent, Calculator,
   ChevronRight, ChevronLeft, Zap, CheckCircle2, Sliders, Info, ShieldCheck, HelpCircle,
-  ArrowRight, ArrowLeft
+  ArrowRight, ArrowLeft, Loader2
 } from 'lucide-react';
 import { QualityRebateRule, QualityParameter, RebateSlab, CommodityQualityParam } from '../../types/erp';
 
@@ -428,6 +429,63 @@ function MastersHubPageContent() {
   const [address, setAddress] = useState('');
   const [state, setState] = useState('Bihar');
   const [gstin, setGstin] = useState('');
+  const [isGstLoading, setIsGstLoading] = useState(false);
+  const [gstVerified, setGstVerified] = useState(false);
+  const [gstAutoMessage, setGstAutoMessage] = useState<string | null>(null);
+
+  // Automatic GST Lookup & Form Enrichment Handler
+  const handleGstLookup = async (inputGstin?: string) => {
+    const targetGstin = (inputGstin || gstin || '').trim().toUpperCase();
+    if (!targetGstin) {
+      showToast('Please enter a 15-character GSTIN number', 'error');
+      return;
+    }
+
+    if (targetGstin.length !== 15) {
+      showToast(`GSTIN must be 15 characters (currently ${targetGstin.length})`, 'error');
+      return;
+    }
+
+    setIsGstLoading(true);
+    setGstAutoMessage(null);
+    try {
+      const data = await gstService.lookupGstin(targetGstin);
+
+      // Auto-populate form fields cleanly
+      if (data.tradeName || data.legalName) {
+        setName(data.tradeName || data.legalName);
+        setCompanyName(data.companyName || data.tradeName || data.legalName);
+        setAddress(data.address || '');
+        setPhone(data.phone || '');
+        setEmail(data.email || '');
+      } else {
+        // If not in database or live registry, clear company name/phone/email so stale entries from previously selected items don't remain
+        setName('');
+        setCompanyName('');
+        setAddress(data.address || '');
+        setPhone(data.phone || '');
+        setEmail(data.email || '');
+      }
+
+      if (data.pan) {
+        setPan(data.pan);
+      }
+      if (data.state) {
+        setState(data.state);
+      }
+
+      setGstVerified(true);
+      const msg = data.tradeName || data.legalName 
+        ? `Autofilled from GSTIN: ${data.tradeName || data.legalName} (${data.state})`
+        : `GSTIN Format Valid (State: ${data.state} | PAN: ${data.pan}). Please enter company name or configure a live API key.`;
+      setGstAutoMessage(msg);
+      showToast(`⚡ ${msg}`, 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to fetch GST details', 'error');
+    } finally {
+      setIsGstLoading(false);
+    }
+  };
 
   // Commodity States
   const [category, setCategory] = useState<'Grains' | 'Oilseeds' | 'Pulses' | 'Other'>('Grains');
@@ -606,6 +664,9 @@ function MastersHubPageContent() {
     setEmail('');
     setAddress('');
     setGstin('');
+    setGstVerified(false);
+    setIsGstLoading(false);
+    setGstAutoMessage(null);
     setVehicleNo('');
     setLicense('');
     setState('Bihar');
@@ -636,6 +697,9 @@ function MastersHubPageContent() {
     setAddress(row.address || row.location || ''); // warehouses use row.location
     setState(row.state || 'Bihar');
     setGstin(row.gstin || '');
+    setGstVerified(!!row.gstin);
+    setIsGstLoading(false);
+    setGstAutoMessage(null);
 
     setCompanyName(row.companyName || '');
     setPan(row.pan || '');
@@ -1734,13 +1798,18 @@ function MastersHubPageContent() {
                 <>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Company / Contact Name *</label>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                        {activeTab === 'farmers' ? 'Farmer Full Name *' : 'Company Name *'}
+                      </label>
                       <input
                         type="text"
                         className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none"
                         value={name}
-                        onChange={e => setName(e.target.value)}
-                        placeholder="e.g. Ramesh Kumar Grain Farms"
+                        onChange={e => {
+                          setName(e.target.value);
+                          setCompanyName(e.target.value);
+                        }}
+                        placeholder={activeTab === 'farmers' ? 'e.g. Ramesh Kumar' : 'e.g. Patanjali Agro Foods Ltd'}
                         required
                       />
                     </div>
@@ -1781,16 +1850,111 @@ function MastersHubPageContent() {
                   </div>
 
                   {activeTab !== 'farmers' && (
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">GSTIN Registration Number *</label>
-                      <input
-                        type="text"
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-750 font-mono focus:outline-none"
-                        value={gstin}
-                        onChange={e => setGstin(e.target.value)}
-                        placeholder="e.g. 10AAAFS4829K1Z4"
-                        required
-                      />
+                    <div className="space-y-1.5 p-3 bg-gradient-to-r from-emerald-50/70 via-teal-50/50 to-slate-50 border border-emerald-200 rounded-xl">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+                          <Sparkles size={13} className="text-emerald-600" />
+                          <span>GSTIN REGISTRATION NUMBER *</span>
+                        </label>
+                        <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300 flex items-center gap-1 shadow-2xs">
+                          <Zap size={11} className="text-emerald-700" />
+                          <span>API Auto-Fill Enabled</span>
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <div className="relative flex-1">
+                          <input
+                            type="text"
+                            maxLength={15}
+                            className={`w-full px-3 py-2 border rounded-lg text-xs font-mono font-bold uppercase transition focus:outline-none ${
+                              gstVerified 
+                                ? 'border-emerald-500 bg-white text-emerald-900 ring-2 ring-emerald-500/20' 
+                                : 'border-slate-300 bg-white text-slate-900 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20'
+                            }`}
+                            value={gstin}
+                            onChange={e => {
+                              const val = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                              setGstin(val);
+                              setGstVerified(false);
+                              setGstAutoMessage(null);
+                              if (val.length === 15) {
+                                handleGstLookup(val);
+                              }
+                            }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleGstLookup();
+                              }
+                            }}
+                            placeholder="e.g. 10AAAFS4829K1Z4"
+                            required
+                          />
+                          {gstVerified && (
+                            <div className="absolute right-3 top-2.5 flex items-center gap-1 text-emerald-600 text-xs font-bold pointer-events-none">
+                              <CheckCircle2 size={15} />
+                              <span className="text-[10px]">Verified</span>
+                            </div>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleGstLookup()}
+                          disabled={isGstLoading || !gstin || gstin.length < 5}
+                          className={`px-3.5 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-xs whitespace-nowrap ${
+                            isGstLoading
+                              ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                          }`}
+                        >
+                          {isGstLoading ? (
+                            <>
+                              <Loader2 size={14} className="animate-spin text-emerald-700" />
+                              <span>Fetching...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Zap size={14} />
+                              <span>Fetch GST Details</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* Live Feedback / Auto-Fill Status Banner */}
+                      {gstAutoMessage && (
+                        <div className="text-[11px] font-semibold text-emerald-800 bg-white/80 p-2 rounded-lg border border-emerald-200 flex items-center gap-1.5 animate-fade-in">
+                          <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
+                          <span>{gstAutoMessage}</span>
+                        </div>
+                      )}
+
+                      {/* Quick demo presets */}
+                      <div className="flex flex-wrap items-center gap-1.5 pt-0.5 text-[10px]">
+                        <span className="text-slate-400 font-semibold">Try sample:</span>
+                        {[
+                          { code: '10AAACA0495L1ZZ', label: 'ARB Bearings' },
+                          { code: '10AAACT5131A1ZC', label: 'Titan Company' },
+                          { code: '10AAAFS4829K1Z4', label: 'Patanjali' },
+                          { code: '10AAACT2727Q1ZG', label: 'Tata Steel' },
+                          { code: '10AAACS8931M2Z1', label: 'Shree Ganesh' },
+                          { code: '08AABCB2234K1Z2', label: 'Adani Wilmar' }
+                        ].map(s => (
+                          <button
+                            key={s.code}
+                            type="button"
+                            onClick={() => {
+                              setGstin(s.code);
+                              handleGstLookup(s.code);
+                            }}
+                            className="px-2 py-0.5 rounded bg-white hover:bg-emerald-100 border border-slate-200 text-slate-600 hover:text-emerald-800 font-mono transition cursor-pointer"
+                          >
+                            {s.code} ({s.label})
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
 
@@ -1806,27 +1970,16 @@ function MastersHubPageContent() {
 
                   {(activeTab === 'suppliers' || activeTab === 'customers') && (
                     <>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Company Name</label>
-                          <input
-                            type="text"
-                            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-750 focus:outline-none"
-                            value={companyName}
-                            onChange={e => setCompanyName(e.target.value)}
-                            placeholder="e.g. BrijRani Agro Foods Private Ltd"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">PAN Card Number</label>
-                          <input
-                            type="text"
-                            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none font-mono"
-                            value={pan}
-                            onChange={e => setPan(e.target.value)}
-                            placeholder="e.g. ABCDE1234F"
-                          />
-                        </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">PAN Card Number</label>
+                        <input
+                          type="text"
+                          maxLength={10}
+                          className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none font-mono uppercase"
+                          value={pan}
+                          onChange={e => setPan(e.target.value.toUpperCase())}
+                          placeholder="e.g. ABCDE1234F"
+                        />
                       </div>
 
                       <div className="border-t border-slate-100 pt-3 mt-3 space-y-3">

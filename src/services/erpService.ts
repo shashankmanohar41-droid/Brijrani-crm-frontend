@@ -846,7 +846,7 @@ export const erpService = {
       soId: so.id,
       soNo: so.soNo,
       date: new Date().toISOString().split('T')[0],
-      warehouseId: so.warehouseId,
+      warehouseId: so.warehouseId || 'WH-01',
       commodityId: so.commodityId,
       batchNo,
       binId,

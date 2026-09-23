@@ -69,6 +69,8 @@ export default function QualityControlPage() {
   const [formDate, setFormDate] = useState(new Date().toISOString().split('T')[0]);
   const [formRefNumber, setFormRefNumber] = useState('');
   const [formPoId, setFormPoId] = useState('');
+  const [formInvoiceNo, setFormInvoiceNo] = useState('');
+  const [formInvoiceId, setFormInvoiceId] = useState('');
   const [formGrnId, setFormGrnId] = useState('');
   const [formCalcMethod, setFormCalcMethod] = useState<'Discount' | 'Pro-Rata' | 'Both'>('Pro-Rata');
   const [formRebateType, setFormRebateType] = useState<'Standard Rebate' | 'Single Rebate' | 'Double Rebate' | 'All' | 'All Types'>('Standard Rebate');
@@ -220,6 +222,14 @@ export default function QualityControlPage() {
     }
 
     const selectedComm = db.commodities.find(c => (c.id || c._id) === formCommodityId);
+    const commName = selectedComm ? selectedComm.name.toLowerCase().trim() : '';
+
+    const filteredRules = rebateRules.filter(r => {
+      const rName = (r.commodityName || '').toLowerCase().trim();
+      const matchId = formCommodityId && (r.commodityId === formCommodityId || (r as any)._id === formCommodityId);
+      const matchName = commName && rName === commName;
+      return matchId || matchName || (!r.commodityId && !r.commodityName);
+    });
 
     const calc = calculateQualityRebateFrontend({
       commodityId: formCommodityId,
@@ -237,7 +247,7 @@ export default function QualityControlPage() {
         standardValue: p.standardValue,
         tolerance: p.tolerance
       })),
-      applicableRules: rebateRules,
+      applicableRules: filteredRules.length > 0 ? filteredRules : rebateRules,
       transactionDate: formDate
     });
 
@@ -312,29 +322,53 @@ export default function QualityControlPage() {
     });
   }, [db.purchaseOrders, db.qualityInspections, qcList, editingQCId]);
 
-  const availableGRNs = useMemo(() => {
-    const usedGrnIdentifiers = new Set<string>();
+  const availableInvoices = useMemo(() => {
+    return (db.purchaseInvoices || []).filter(inv => {
+      if (inv.status === 'Cancelled') return false;
 
-    qcList.forEach(qc => {
-      if (editingQCId && (qc._id === editingQCId || qc.id === editingQCId)) return;
-      if (qc.status !== 'Rejected') {
-        if (qc.grnId) usedGrnIdentifiers.add(String(qc.grnId).toLowerCase().trim());
-        if ((qc as any).grnNumber) usedGrnIdentifiers.add(String((qc as any).grnNumber).toLowerCase().trim());
-        if (qc.referenceNumber) usedGrnIdentifiers.add(String(qc.referenceNumber).toLowerCase().trim());
+      // If a PO is already selected in the form, ONLY show invoices belonging to that PO
+      if (formRefNumber || formPoId) {
+        const matchesPo = 
+          (formRefNumber && (inv.poNumber === formRefNumber || (inv as any).poId === formRefNumber)) ||
+          (formPoId && (inv.poNumber === formPoId || (inv as any).poId === formPoId));
+        if (!matchesPo) return false;
       }
+
+      // If editing existing QC, allow linked invoice
+      if (editingQCId) {
+        const currentQc = qcList.find(q => (q._id || q.id) === editingQCId);
+        if (currentQc && ((currentQc as any).invoiceNumber === inv.invoiceNo || (currentQc as any).invoiceId === inv.id || currentQc.poNumber === inv.poNumber)) {
+          return true;
+        }
+      }
+
+      // Exclude invoices that belong to POs that ALREADY have a QC Inspection
+      const alreadyHasQC = (qcList || []).some((q: any) => 
+        q.status !== 'Rejected' && (
+          (inv.poNumber && (q.poNumber === inv.poNumber || q.referenceNumber === inv.poNumber || q.poId === inv.poNumber)) ||
+          ((q as any).invoiceNumber && ((q as any).invoiceNumber === inv.invoiceNo || (q as any).invoiceId === inv.id))
+        )
+      ) || (db.qualityInspections || []).some((qi: any) => 
+        qi.status !== 'Rejected' && (
+          (inv.poNumber && (qi.poNo === inv.poNumber || qi.poId === inv.poNumber)) ||
+          (qi.invoiceNo && (qi.invoiceNo === inv.invoiceNo || qi.invoiceId === inv.id))
+        )
+      );
+
+      if (alreadyHasQC) return false;
+
+      // If no PO selected yet, ensure invoice belongs to an available (non-QC'd) PO
+      if (!formRefNumber && !formPoId && inv.poNumber) {
+        const poExists = availablePOs.some(p => p.poNo === inv.poNumber || p.id === inv.poNumber);
+        if (!poExists) return false;
+      }
+
+      return true;
     });
+  }, [db.purchaseInvoices, qcList, db.qualityInspections, editingQCId, formRefNumber, formPoId, availablePOs]);
 
-    return db.grns.filter(g => {
-      const idStr = String(g.id || (g as any)._id || '').toLowerCase().trim();
-      const grnNoStr = String(g.grnNo || (g as any).grnNumber || '').toLowerCase().trim();
-
-      const isUsed = (idStr && usedGrnIdentifiers.has(idStr)) || (grnNoStr && usedGrnIdentifiers.has(grnNoStr));
-      return !isUsed;
-    });
-  }, [db.grns, qcList, editingQCId]);
-
-  // Auto-fetch details when selecting reference PO or GRN
-  const handleSelectReferencePo = (poNo: string) => {
+  // Auto-fetch details when selecting reference PO or Purchase Invoice (PI)
+  const handleSelectReferencePo = (poNo: string, linkedInvNo?: string) => {
     const po = db.purchaseOrders.find(p => 
       p.poNo === poNo || 
       p.id === poNo || 
@@ -363,6 +397,18 @@ export default function QualityControlPage() {
       setFormPartyId(firstPartner);
     }
 
+    // Auto-link purchase invoice if present
+    const inv = linkedInvNo 
+      ? db.purchaseInvoices.find(i => i.invoiceNo === linkedInvNo) 
+      : db.purchaseInvoices.find(i => i.poNumber === actualPoNo || i.poNumber === po.id);
+    if (inv) {
+      setFormInvoiceNo(inv.invoiceNo);
+      setFormInvoiceId(inv.id || '');
+    } else if (!linkedInvNo) {
+      setFormInvoiceNo('');
+      setFormInvoiceId('');
+    }
+
     if (po.items && po.items.length > 0) {
       const item = po.items[0];
       const rawItemVal = typeof item.item === 'object' && item.item !== null ? String((item.item as any)?._id || (item.item as any)?.name || '') : String(item.item || '');
@@ -385,26 +431,27 @@ export default function QualityControlPage() {
     showToast(`Loaded details from Purchase Order ${actualPoNo}`, 'info');
   };
 
-  const handleSelectReferenceGrn = (grnNo: string) => {
-    const grn = db.grns.find(g => g.grnNo === grnNo || g.id === grnNo || (g as any)._id === grnNo || (g as any).grnNumber === grnNo);
-    if (!grn) return;
-    const actualGrnNo = grn.grnNo || (grn as any).grnNumber || '';
-    setFormRefNumber(actualGrnNo);
-    setFormGrnId(grn.id || (grn as any)._id || '');
-    setFormVehicleNumber(grn.vehicleNo || '');
-    setFormPartyType(grn.partyType || 'supplier');
-    setFormPartyId(grn.partyId || '');
-    if (grn.items && grn.items.length > 0) {
-      const item = grn.items[0];
-      const comm = db.commodities.find(c => c.name?.toLowerCase() === item.item?.toLowerCase() || c.id === item.item || (c as any)._id === item.item);
-      if (comm) {
-        setFormCommodityId(comm.id || (comm as any)._id || '');
-        setFormBaseRate(comm.purchaseCost || 22000);
+  const handleSelectReferenceInvoice = (invNo: string) => {
+    setFormInvoiceNo(invNo);
+    const inv = db.purchaseInvoices.find(i => i.invoiceNo === invNo || i.id === invNo);
+    if (!inv) return;
+    setFormInvoiceId(inv.id || '');
+    if (inv.poNumber) {
+      handleSelectReferencePo(inv.poNumber, invNo);
+    } else {
+      setFormPartyType(inv.partyType || 'supplier');
+      setFormPartyId(inv.supplierId || '');
+      if (inv.items && inv.items.length > 0) {
+        const item = inv.items[0];
+        const comm = db.commodities.find(c => c.id === item.item || (c as any)._id === item.item || c.name?.toLowerCase() === String(item.item).toLowerCase());
+        if (comm) {
+          setFormCommodityId(comm.id || (comm as any)._id || '');
+        }
+        setFormQuantity(item.invoiceQty || item.poQty || 100);
+        setFormBaseRate(item.baseRate || item.rate || 25000);
       }
-      setFormQuantity(item.receivedNow || item.orderedQty || 50);
-      setFormUnit(item.unit || 'MT');
     }
-    showToast(`Loaded details from GRN ${actualGrnNo}`, 'info');
+    showToast(`Loaded details from Purchase Invoice ${inv.invoiceNo}`, 'info');
   };
 
   // Open Add QC Modal
@@ -533,8 +580,10 @@ export default function QualityControlPage() {
       baseRate: Number(formBaseRate),
       date: formDate,
       referenceNumber: formRefNumber,
+      poNumber: formRefNumber,
       poId: formPoId || undefined,
-      grnId: formGrnId || undefined,
+      invoiceNumber: formInvoiceNo || undefined,
+      invoiceId: formInvoiceId || undefined,
       rebateType: formRebateType,
       calculationMethod: formCalcMethod,
       discountRate: Number(formDiscountRate) || 0,
@@ -712,7 +761,12 @@ export default function QualityControlPage() {
         doc.text(p.parameterName, 16, yPos);
         doc.text(`${p.standardValue}${p.unit || '%'}`, 65, yPos);
         doc.text(`${p.actualValue}${p.unit || '%'}`, 90, yPos);
-        doc.text(`${p.deviation > 0 ? '+' : ''}${p.deviation.toFixed(2)}${p.unit || '%'}`, 115, yPos);
+        const isLowerWorse = p.parameterName?.toLowerCase().includes('protein') || p.parameterName?.toLowerCase().includes('oil');
+        const fallbackDev = isLowerWorse 
+          ? ((Number(p.standardValue) || 0) - (Number(p.actualValue) || 0))
+          : ((Number(p.actualValue) || 0) - (Number(p.standardValue) || 0));
+        const dev = typeof p.deviation === 'number' ? p.deviation : fallbackDev;
+        doc.text(`${dev > 0 ? '+' : ''}${dev.toFixed(2)}${p.unit || '%'}`, 115, yPos);
         doc.text(`Rs ${p.rebatePerUnit.toFixed(2)}`, 140, yPos);
         doc.text(`Rs ${p.rebateTotal.toLocaleString('en-IN')}`, 170, yPos);
         yPos += 7;
@@ -1272,7 +1326,7 @@ export default function QualityControlPage() {
 
             {/* Modal Body */}
             <form onSubmit={handleSaveQC} className="p-6 overflow-y-auto space-y-5 flex-1">
-              {/* Mandatory Purchase Order Link Section */}
+              {/* Mandatory Purchase Order & Purchase Invoice Link Section */}
               <div className={`p-3.5 rounded-xl border transition ${
                 formRefNumber ? 'bg-emerald-50/70 border-emerald-300' : 'bg-amber-50/80 border-amber-300'
               }`}>
@@ -1282,16 +1336,21 @@ export default function QualityControlPage() {
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-bold text-slate-900">
-                          Select Purchase Order to Inspect <span className="text-red-500">*</span>
+                          Link Purchase Order (PO) &amp; Purchase Invoice (PI) <span className="text-red-500">*</span>
                         </span>
                         {formRefNumber && (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                            <Check size={10} /> Linked: {formRefNumber}
+                            <Check size={10} /> Linked PO: {formRefNumber}
+                          </span>
+                        )}
+                        {formInvoiceNo && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">
+                            <Check size={10} /> Linked PI: {formInvoiceNo}
                           </span>
                         )}
                       </div>
                       <p className="text-[11px] text-slate-500 font-normal">
-                        Quality Inspection requires an approved PO (Orders already inspected are automatically excluded)
+                        Quality Inspection verifies goods against Purchase Order and registered Purchase Invoice
                       </p>
                     </div>
                   </div>
@@ -1314,14 +1373,14 @@ export default function QualityControlPage() {
                     </select>
 
                     <select
-                      className="p-2 border border-slate-300 rounded-lg bg-white text-xs text-slate-700 shadow-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                      onChange={(e) => { if (e.target.value) handleSelectReferenceGrn(e.target.value); }}
-                      value={formGrnId || ""}
+                      className="p-2 border border-slate-300 rounded-lg bg-white text-xs text-slate-700 shadow-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none min-w-[200px]"
+                      onChange={(e) => { if (e.target.value) handleSelectReferenceInvoice(e.target.value); }}
+                      value={formInvoiceNo || ""}
                     >
-                      <option value="">-- Optional: Link Inward GRN ({availableGRNs.length}) --</option>
-                      {availableGRNs.map(g => (
-                        <option key={g.id || (g as any)._id} value={g.grnNo || (g as any).grnNumber}>
-                          {g.grnNo || (g as any).grnNumber} ({g.vehicleNo || 'N/A'})
+                      <option value="">-- Link Purchase Invoice (PI) ({availableInvoices.length}) --</option>
+                      {availableInvoices.map(inv => (
+                        <option key={inv.id} value={inv.invoiceNo}>
+                          {inv.invoiceNo} {inv.poNumber ? `(PO: ${inv.poNumber})` : ''}
                         </option>
                       ))}
                     </select>
@@ -1611,6 +1670,11 @@ export default function QualityControlPage() {
                           const calcItem = calculationResult?.parameterCalculations?.find(
                             (c: any) => c.parameterName.toLowerCase() === p.parameterName.toLowerCase()
                           );
+                          const isLowerWorse = p.parameterName?.toLowerCase().includes('protein') || p.parameterName?.toLowerCase().includes('oil');
+                          const fallbackDev = isLowerWorse 
+                            ? ((Number(p.standardValue) || 0) - (Number(p.actualValue) || 0))
+                            : ((Number(p.actualValue) || 0) - (Number(p.standardValue) || 0));
+                          const deviationVal = calcItem ? calcItem.deviation : fallbackDev;
                           return (
                             <tr key={idx} className="hover:bg-slate-50/50">
                               <td className="p-2.5 font-bold text-slate-900">
@@ -1639,11 +1703,9 @@ export default function QualityControlPage() {
                                 </div>
                               </td>
                               <td className="p-2.5 text-right font-mono text-xs">
-                                {calcItem ? (
-                                  <span className={`font-bold ${calcItem.deviation > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                                    {calcItem.deviation > 0 ? `+${calcItem.deviation.toFixed(2)}` : calcItem.deviation.toFixed(2)} {p.unit}
-                                  </span>
-                                ) : '-'}
+                                <span className={`font-bold ${deviationVal > (p.tolerance || 0) ? 'text-amber-600' : 'text-emerald-600'}`}>
+                                  {deviationVal > 0 ? `+${deviationVal.toFixed(2)}` : deviationVal.toFixed(2)} {p.unit}
+                                </span>
                               </td>
                               <td className="p-2.5 text-right font-mono text-xs">
                                 {calcItem ? (

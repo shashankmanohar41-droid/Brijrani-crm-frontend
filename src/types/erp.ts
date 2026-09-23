@@ -654,6 +654,8 @@ export interface SalesOrder {
   id: string;
   soNo: string;
   quotationNo?: string;
+  orderType?: 'GT' | 'WH'; // GT = General Trade (Direct Mill/Party), WH = Warehouse
+  fulfillmentType?: 'GT' | 'WH';
   date: string;
   customerId: string;
   commodityId: string;
@@ -662,7 +664,7 @@ export interface SalesOrder {
   gstPercent: number;
   freightCost: number;
   total: number;
-  warehouseId: string;
+  warehouseId?: string;
   deliveryLocation: string;
   expectedDispatch: string;
   paymentTerms: string;
@@ -707,15 +709,28 @@ export interface DeliveryChallan {
   dcNo: string;
   soId: string;
   soNo: string;
+  invoiceId?: string;
+  invoiceNo?: string;
+  qcId?: string;
+  qcNo?: string;
   customerId: string;
-  warehouseId: string;
+  warehouseId?: string;
+  orderType?: 'GT' | 'WH';
   vehicleNo: string;
   driverName: string;
+  transporter?: string;
+  grossWeight?: number;
+  tareWeight?: number;
+  netWeight?: number;
   commodityId: string;
   quantity: number;
   deliveryAddress: string;
   dispatchDate: string;
-  status: 'Draft' | 'Dispatched' | 'Delivered' | 'Cancelled';
+  challanDate?: string;
+  remarks?: string;
+  photos?: string[];
+  outwardStatus?: 'Pending' | 'Completed';
+  status: 'Draft' | 'Dispatched' | 'Delivered' | 'Cancelled' | 'Completed';
 }
 
 export interface SalesInvoiceItem {
@@ -723,6 +738,10 @@ export interface SalesInvoiceItem {
   hsn: string;
   quantity: number;
   rate: number;
+  baseRate?: number;
+  qualityRebatePerUnit?: number;
+  qualityRebateTotal?: number;
+  settledRate?: number;
   discount: number;
   taxableAmount: number;
   cgst: number; // Amount
@@ -735,12 +754,19 @@ export interface SalesInvoice {
   id: string;
   invoiceNo: string;
   invoiceDate: string;
+  soId?: string;
+  soNo?: string;
+  qcId?: string;
+  qcNumber?: string;
   dcNo?: string;
   customerId: string;
+  orderType?: 'GT' | 'WH';
   gstin: string;
   billingAddress: string;
   shippingAddress: string;
   items: SalesInvoiceItem[];
+  baseSubtotal?: number;
+  qualityRebateDeduction?: number;
   taxableAmount: number;
   cgst: number;
   sgst: number;
@@ -751,6 +777,17 @@ export interface SalesInvoice {
   dueDate: string;
   paymentStatus: 'Paid' | 'Partially Paid' | 'Unpaid' | 'Overdue';
   ewayBillNo?: string;
+  remarks?: string;
+  amountPaid?: number;
+  remainingAmount?: number;
+  paymentHistory?: Array<{
+    date: string;
+    reference: string;
+    mode: string;
+    account: string;
+    amount: number;
+    notes?: string;
+  }>;
 }
 
 export interface EWayBill {

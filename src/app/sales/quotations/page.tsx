@@ -167,7 +167,7 @@ function SalesQuotationsPageContent() {
 
     refreshDb();
     showToast(`Converted to Sales Order ${so.soNo}! Stock reserved.`, 'success');
-    router.push(`/sales/orders?po=${so.id}`); // navigate to see the order
+    router.push(`/sales/orders?so=${so.id}`); // navigate to see the order
   };
 
   const handlePrintPDF = (quote: SalesQuotation) => {
