@@ -220,11 +220,22 @@ function SalesQcPageContent() {
         }
       }
 
-      let rulesToUse = matchingRules;
+      // Deduplicate matching rules by parameterName so each parameter is configured only ONCE
+      const uniqueRules: QualityRebateRule[] = [];
+      const seenParams = new Set<string>();
+      for (const r of matchingRules) {
+        const paramKey = (r.parameterName || '').toLowerCase().trim();
+        if (paramKey && !seenParams.has(paramKey)) {
+          seenParams.add(paramKey);
+          uniqueRules.push(r);
+        }
+      }
+
+      let rulesToUse = uniqueRules;
       if (formRebateType === 'Single Rebate') {
-        rulesToUse = matchingRules.slice(0, 1);
+        rulesToUse = uniqueRules.slice(0, 1);
       } else if (formRebateType === 'Double Rebate') {
-        rulesToUse = matchingRules.slice(0, 2);
+        rulesToUse = uniqueRules.slice(0, 2);
       }
 
       setFormParameters(rulesToUse.map(r => {
@@ -453,7 +464,14 @@ function SalesQcPageContent() {
     setFormNotes(qc.notes || '');
 
     if (qc.qualityParameters && qc.qualityParameters.length > 0) {
-      setFormParameters(qc.qualityParameters.map((p: any) => ({
+      const seen = new Set<string>();
+      const uniqueParams = qc.qualityParameters.filter((p: any) => {
+        const k = (p.parameterName || '').toLowerCase().trim();
+        if (!k || seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+      setFormParameters(uniqueParams.map((p: any) => ({
         parameterName: p.parameterName,
         actualValue: p.actualValue,
         unit: p.unit || '%',

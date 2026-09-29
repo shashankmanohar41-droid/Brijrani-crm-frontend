@@ -141,7 +141,7 @@ export interface Driver {
 }
 
 // Procurement Flows
-export type DocumentStatus = 'Draft' | 'Sent' | 'Under Negotiation' | 'Approved' | 'Rejected' | 'Cancelled' | 'Converted' | 'Completed' | 'Pending Approval' | 'Received' | 'Selected';
+export type DocumentStatus = 'Draft' | 'Sent' | 'Under Negotiation' | 'Approved' | 'Rejected' | 'Cancelled' | 'Converted' | 'Completed' | 'Pending Approval' | 'Received' | 'Selected' | 'Quoted';
 
 export interface PurchaseEnquiryItem {
   id?: string;
@@ -326,6 +326,9 @@ export interface GRN {
   qualityStatus: 'Pending' | 'Passed' | 'Rejected' | 'Partially Passed' | 'On Hold';
   inwardStatus: 'Pending' | 'Completed';
   status: 'Draft' | 'Pending QC' | 'Completed' | 'Cancelled' | 'Accepted' | 'Rejected';
+  grossWeight?: number;
+  tareWeight?: number;
+  netWeight?: number;
   items: GRNItem[];
   // Backward compatibility:
   commodityId: string;
@@ -569,6 +572,18 @@ export interface PurchaseInvoice {
   items: PurchaseInvoiceItem[];
   mismatchReason?: string;
   remarks?: string;
+  vehicleNo?: string;
+  driverName?: string;
+  driverPhone?: string;
+  transporter?: string;
+  lrNumber?: string;
+  lrDate?: string;
+  ewayBillNo?: string;
+  grossWeight?: number;
+  tareWeight?: number;
+  netWeight?: number;
+  isFinalInvoice?: boolean;
+  invoiceType?: 'Preliminary' | 'Final';
   amountPaid?: number;
   remainingAmount?: number;
   paymentHistory?: Array<{
@@ -668,6 +683,11 @@ export interface SalesOrder {
   deliveryLocation: string;
   expectedDispatch: string;
   paymentTerms: string;
+  purchaseInvoiceId?: string;
+  purchaseInvoiceNo?: string;
+  qcId?: string;
+  qcNumber?: string;
+  grnNumber?: string;
   status: 'Draft' | 'Pending Approval' | 'Approved' | 'Picking' | 'Packing' | 'Shipped' | 'Completed' | 'Cancelled';
   notes?: string;
 }

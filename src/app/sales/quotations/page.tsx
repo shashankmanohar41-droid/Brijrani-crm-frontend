@@ -2,7 +2,7 @@
 
 export const dynamic = 'force-dynamic';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useErp } from '../../../context/ErpContext';
 import { erpService } from '../../../services/erpService';
@@ -22,6 +22,7 @@ function SalesQuotationsPageContent() {
   const [statusFilter, setStatusFilter] = useState('All');
 
   // Form states
+  const [enquiryNo, setEnquiryNo] = useState('');
   const [customerId, setCustomerId] = useState('');
   const [commodityId, setCommodityId] = useState('');
   const [quantity, setQuantity] = useState(0);
@@ -31,22 +32,58 @@ function SalesQuotationsPageContent() {
   const [discountAmount, setDiscountAmount] = useState(0);
   const [notes, setNotes] = useState('');
 
-  // Handle conversion query params from Market Price Monitor
+  // Handle conversion query params from Enquiries or Market Price Monitor
+  const enqQuery = searchParams.get('enquiry');
+  const custQuery = searchParams.get('customer');
   const cmdQuery = searchParams.get('commodity');
   const qtyQuery = searchParams.get('qty');
   const rateQuery = searchParams.get('rate');
 
   useEffect(() => {
-    if (cmdQuery) {
+    if (enqQuery) {
+      setEnquiryNo(enqQuery);
+      if (custQuery) setCustomerId(custQuery);
+      if (cmdQuery) setCommodityId(cmdQuery);
+      if (qtyQuery) setQuantity(Number(qtyQuery));
+      if (rateQuery) setRate(Number(rateQuery));
+      setIsCreateOpen(true);
+    } else if (cmdQuery) {
       setCommodityId(cmdQuery);
       if (qtyQuery) setQuantity(Number(qtyQuery));
       if (rateQuery) setRate(Number(rateQuery));
       setIsCreateOpen(true);
     }
-  }, [cmdQuery, qtyQuery, rateQuery]);
+  }, [enqQuery, custQuery, cmdQuery, qtyQuery, rateQuery]);
 
   const customers = db.customers;
   const commodities = db.commodities;
+  const enquiries = db.salesEnquiries || [];
+
+  // Available unquoted/active enquiries (exclude enquiries that already have an active Sales Quotation)
+  const availableEnquiries = useMemo(() => {
+    return (db.salesEnquiries || []).filter((enq: any) => {
+      if (enq.status === 'Won' || enq.status === 'Lost' || enq.status === 'Closed' || enq.status === 'Quoted') return false;
+      const alreadyHasQuote = (db.salesQuotations || []).some(sq => 
+        (sq.enquiryNo === enq.enquiryNo || (sq as any).enquiryId === enq.id) &&
+        sq.status !== 'Rejected'
+      );
+      return !alreadyHasQuote;
+    });
+  }, [db.salesEnquiries, db.salesQuotations]);
+
+  const handleSelectEnquiry = (selectedEnqNo: string) => {
+    setEnquiryNo(selectedEnqNo);
+    if (!selectedEnqNo) return;
+    const enq = (db.salesEnquiries || []).find((e: any) => e.enquiryNo === selectedEnqNo || e.id === selectedEnqNo);
+    if (enq) {
+      setCustomerId(enq.customerId);
+      setCommodityId(enq.commodityId);
+      setQuantity(enq.quantity);
+      setRate(enq.expectedRate || 0);
+      setNotes(`Quoted against Sales Enquiry ${enq.enquiryNo}. Target Delivery: ${enq.requiredDeliveryDate || 'Immediate'}`);
+      showToast(`Loaded details from Sales Enquiry ${enq.enquiryNo}`, 'info');
+    }
+  };
 
   const filteredQuotes = statusFilter === 'All'
     ? db.salesQuotations
@@ -67,7 +104,20 @@ function SalesQuotationsPageContent() {
   const marginPercent = purchaseCost > 0 ? Math.round((grossMargin / expectedCostValue) * 100) : 0;
 
   const columns: any[] = [
-    { header: 'Quotation No', accessor: 'quotationNo' as keyof SalesQuotation, sortable: true },
+    { 
+      header: 'Quotation No', 
+      accessor: (row: SalesQuotation) => (
+        <div>
+          <span className="font-bold text-slate-800">{row.quotationNo}</span>
+          {row.enquiryNo && (
+            <span className="text-[9px] text-primary-600 font-semibold block">
+              Enq: {row.enquiryNo}
+            </span>
+          )}
+        </div>
+      ), 
+      sortable: true 
+    },
     { 
       header: 'Customer Name', 
       accessor: (row: SalesQuotation) => customers.find(c => c.id === row.customerId)?.name || 'Unknown'
@@ -114,6 +164,7 @@ function SalesQuotationsPageContent() {
     const newQuote: SalesQuotation = {
       id,
       quotationNo,
+      enquiryNo: enquiryNo || undefined,
       date: new Date().toISOString().split('T')[0],
       customerId,
       commodityId,
@@ -134,6 +185,15 @@ function SalesQuotationsPageContent() {
     };
 
     erpService.salesQuotations.create(newQuote);
+
+    if (enquiryNo) {
+      const enq = (db.salesEnquiries || []).find((e: any) => e.enquiryNo === enquiryNo || e.id === enquiryNo);
+      if (enq) {
+        enq.status = 'Quoted';
+        erpService.salesEnquiries.update(enq);
+      }
+    }
+
     refreshDb();
     setIsCreateOpen(false);
     setSelectedQuote(newQuote);
@@ -382,6 +442,12 @@ function SalesQuotationsPageContent() {
 
               {/* General Details */}
               <div className="space-y-2.5 text-xs font-semibold text-slate-600">
+                {selectedQuote.enquiryNo && (
+                  <div className="flex justify-between border-b border-slate-50 pb-1.5">
+                    <span className="text-slate-400">Linked Enquiry:</span>
+                    <span className="text-primary-700 font-bold bg-primary-50 px-2 py-0.5 rounded">{selectedQuote.enquiryNo}</span>
+                  </div>
+                )}
                 <div className="flex justify-between border-b border-slate-50 pb-1.5">
                   <span className="text-slate-400">Customer Name:</span>
                   <span>{customers.find(c => c.id === selectedQuote.customerId)?.name}</span>
@@ -464,6 +530,58 @@ function SalesQuotationsPageContent() {
             </div>
 
             <form onSubmit={handleCreateQuotation} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
+              {/* Link to Sales Enquiry Selector */}
+              <div className="p-3 bg-primary-50/60 border border-primary-200 rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-primary-950 uppercase tracking-wider flex items-center gap-1.5">
+                    <ClipboardList size={13} className="text-primary-600" />
+                    <span>Link to Sales Enquiry (Optional Auto-Fill)</span>
+                  </label>
+                  {enquiryNo && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEnquiryNo('');
+                        showToast('Cleared enquiry link', 'info');
+                      }}
+                      className="text-[10px] text-primary-800 hover:text-rose-600 font-semibold cursor-pointer"
+                    >
+                      Clear Link
+                    </button>
+                  )}
+                </div>
+
+                <select
+                  value={enquiryNo}
+                  onChange={e => handleSelectEnquiry(e.target.value)}
+                  className="w-full px-3 py-2 border border-primary-300 rounded-lg text-xs bg-white font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                >
+                  <option value="">-- Direct Quotation (No Linked Enquiry) --</option>
+                  {availableEnquiries.map((enq: any) => {
+                    const cust = customers.find(c => c.id === enq.customerId);
+                    const comm = commodities.find(c => c.id === enq.commodityId);
+                    return (
+                      <option key={enq.id} value={enq.enquiryNo}>
+                        {enq.enquiryNo} &minus; {cust?.name || 'Customer'} ({comm?.name || 'Commodity'} &minus; {enq.quantity} MT @ ₹{enq.expectedRate?.toLocaleString() || 0})
+                      </option>
+                    );
+                  })}
+                </select>
+
+                {enquiryNo && (() => {
+                  const enq = (db.salesEnquiries || []).find((e: any) => e.enquiryNo === enquiryNo);
+                  if (!enq) return null;
+                  return (
+                    <div className="text-[11px] text-primary-900 bg-white/80 p-2 rounded-lg border border-primary-100 flex items-center justify-between">
+                      <span>Linked: <strong>{enq.enquiryNo}</strong> &bull; Target Rate: ₹{enq.expectedRate?.toLocaleString()}/MT</span>
+                      <span className="text-[10px] bg-primary-100 text-primary-800 font-bold px-2 py-0.5 rounded">
+                        Required: {formatDate(enq.requiredDeliveryDate)}
+                      </span>
+                    </div>
+                  );
+                })()}
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Select Customer Name *</label>
@@ -502,8 +620,9 @@ function SalesQuotationsPageContent() {
                   <input
                     type="number"
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700"
-                    value={quantity}
-                    onChange={e => setQuantity(Math.max(1, Number(e.target.value)))}
+                    value={quantity === 0 ? '' : quantity}
+                    placeholder="e.g. 50"
+                    onChange={e => setQuantity(e.target.value === '' ? 0 : Number(e.target.value))}
                     required
                   />
                 </div>
@@ -513,8 +632,9 @@ function SalesQuotationsPageContent() {
                   <input
                     type="number"
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700"
-                    value={rate}
-                    onChange={e => setRate(Math.max(1, Number(e.target.value)))}
+                    value={rate === 0 ? '' : rate}
+                    placeholder="e.g. 24500"
+                    onChange={e => setRate(e.target.value === '' ? 0 : Number(e.target.value))}
                     required
                   />
                 </div>

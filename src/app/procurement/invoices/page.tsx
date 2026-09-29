@@ -10,7 +10,7 @@ import api from '../../../services/axios';
 import { PurchaseInvoice, PurchaseInvoiceItem, PurchaseOrder, GRN } from '../../../types/erp';
 import { formatDate } from '../../../utils/dateUtils';
 import DataTable from '../../../components/shared/DataTable';
-import { FileText, Plus, Landmark, CheckCircle, AlertTriangle, HelpCircle, Download, FileCheck, ArrowRight, ShieldCheck, Edit3, Wallet, Eye, Trash2, Truck, FlaskConical, Clock, Lock } from 'lucide-react';
+import { FileText, Plus, Landmark, CheckCircle, AlertTriangle, HelpCircle, Download, FileCheck, ArrowRight, ShieldCheck, Edit3, Wallet, Eye, Trash2, Truck, Clock, Lock } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import IndianDateInput from '../../../components/shared/IndianDateInput';
 
@@ -25,15 +25,6 @@ export default function PurchaseInvoicesPage() {
   const [isViewMode, setIsViewMode] = useState(false);
   const [activeTab, setActiveTab] = useState<'All' | 'Matched' | 'Mismatch' | 'Approved' | 'Paid' | 'Disputed'>('All');
 
-  // Payment tracking states
-  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
-  const [paymentAmount, setPaymentAmount] = useState<number>(0);
-  const [paymentDate, setPaymentDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [paymentMode, setPaymentMode] = useState<string>('Bank Transfer');
-  const [paymentAccount, setPaymentAccount] = useState<string>('HDFC Bank A/c');
-  const [paymentReference, setPaymentReference] = useState<string>('');
-  const [paymentNotes, setPaymentNotes] = useState<string>('');
-
   // Form states for Invoice Header
   const [invoiceNo, setInvoiceNo] = useState('');
   const [poNo, setPoNo] = useState('');
@@ -46,6 +37,28 @@ export default function PurchaseInvoicesPage() {
   const [discount, setDiscount] = useState(0);
   const [remarks, setRemarks] = useState('');
   const [qcList, setQcList] = useState<any[]>([]);
+
+  // Vehicle & Logistics states
+  const [vehicleNo, setVehicleNo] = useState('');
+  const [driverName, setDriverName] = useState('');
+  const [driverPhone, setDriverPhone] = useState('');
+  const [transporter, setTransporter] = useState('');
+  const [lrNumber, setLrNumber] = useState('');
+  const [lrDate, setLrDate] = useState('');
+  const [ewayBillNo, setEwayBillNo] = useState('');
+  const [grossWeight, setGrossWeight] = useState<number>(0);
+  const [tareWeight, setTareWeight] = useState<number>(0);
+  const [netWeight, setNetWeight] = useState<number>(0);
+
+  const handleGrossWeightChange = (val: number) => {
+    setGrossWeight(val);
+    setNetWeight(Math.max(0, val - (tareWeight || 0)));
+  };
+
+  const handleTareWeightChange = (val: number) => {
+    setTareWeight(val);
+    setNetWeight(Math.max(0, (grossWeight || 0) - val));
+  };
 
   // Form items list
   const [itemsList, setItemsList] = useState<PurchaseInvoiceItem[]>([]);
@@ -106,63 +119,6 @@ export default function PurchaseInvoicesPage() {
     });
   }, [poNo, db.purchaseOrders, db.grns, db.purchaseInvoices, selectedInvoice]);
 
-  // Helper to populate items directly from QC (Auto Quality Rebate Deduction)
-  const populateItemsFromQC = (qc: any) => {
-    if (!qc) return;
-    setQcId(qc._id || qc.id);
-    setQcNo(qc.qcNumber || '');
-    if (qc.poNumber) setPoNo(qc.poNumber);
-    if (qc.grnNumber) setGrnNo(qc.grnNumber);
-
-    const comm = db.commodities.find(c => 
-      (qc.commodityId && (c.id === qc.commodityId || c._id === qc.commodityId)) ||
-      (qc.commodityName && c.name?.toLowerCase() === qc.commodityName?.toLowerCase())
-    ) || db.commodities[0];
-
-    const taxRate = comm?.defaultGst !== undefined ? Number(comm.defaultGst) : 0;
-    const baseRate = Number(qc.baseRate || 0);
-    const rebatePerUnit = Number(qc.totalRebate || 0);
-    const settledRate = Number(qc.finalRate || (baseRate - rebatePerUnit));
-    const invoiceQty = Number(qc.quantity || 0);
-    const sub = invoiceQty * settledRate;
-    const taxVal = Math.round(sub * (taxRate / 100));
-
-    const invoiceItems: PurchaseInvoiceItem[] = [{
-      item: comm?.id || comm?._id || qc.commodityName || 'MAIZE',
-      poQty: invoiceQty,
-      receivedQty: invoiceQty,
-      invoiceQty: invoiceQty,
-      baseRate: baseRate,
-      qualityRebatePerUnit: rebatePerUnit,
-      qualityRebateTotal: Number(qc.totalDeduction || (rebatePerUnit * invoiceQty)),
-      settledRate: settledRate,
-      rate: settledRate,
-      discount: 0,
-      taxPercent: taxRate,
-      taxAmount: taxVal,
-      amount: sub + taxVal
-    }];
-
-    setItemsList(invoiceItems);
-    setDueDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
-    setFreight(0);
-    setOtherCharges(0);
-    setDiscount(0);
-    setRemarks(`Settlement as per Quality Inspection ${qc.qcNumber} (${qc.commodityName || 'Cargo'} - Base: ₹${baseRate}/${qc.unit || 'MT'}, Rebate: -₹${rebatePerUnit}/${qc.unit || 'MT'}, Net Settled: ₹${settledRate}/${qc.unit || 'MT'})`);
-  };
-
-  const handleQcChange = (selectedQcId: string) => {
-    setQcId(selectedQcId);
-    if (!selectedQcId) {
-      setQcNo('');
-      return;
-    }
-    const qc = (qcList || []).find((q: any) => (q._id || q.id) === selectedQcId || q.qcNumber === selectedQcId);
-    if (qc) {
-      populateItemsFromQC(qc);
-    }
-  };
-
   // Helper to populate items directly from PO
   const populateItemsFromPo = (po: PurchaseOrder) => {
     const invoiceItems: PurchaseInvoiceItem[] = (po.items || []).map(poItem => {
@@ -210,12 +166,10 @@ export default function PurchaseInvoicesPage() {
     setDiscount(po.discount || 0);
   };
 
-  // Load PO details and auto-populate items when PO selection changes
+  // Load PO details and auto-populate items & vehicle when PO selection changes
   const handlePoChange = (selectedPoNo: string) => {
     setPoNo(selectedPoNo);
     setGrnNo('');
-    setQcId('');
-    setQcNo('');
     const po = db.purchaseOrders.find(p => p.poNo === selectedPoNo || p.id === selectedPoNo);
     if (po) {
       populateItemsFromPo(po);
@@ -224,70 +178,65 @@ export default function PurchaseInvoicesPage() {
     }
   };
 
-  // Pre-fill / update invoice item structures when GRN selection changes (if attached)
+  // Pre-fill / update invoice item structures & vehicle info when GRN selection changes
   const handleGrnChange = (selectedGrnNo: string) => {
     setGrnNo(selectedGrnNo);
     const po = db.purchaseOrders.find(p => p.poNo === poNo || p.id === poNo);
     if (po) {
       populateItemsFromPo(po);
     }
+    const grn = db.grns.find(g => g.grnNo === selectedGrnNo || g.id === selectedGrnNo);
+    if (grn) {
+      if (grn.vehicleNo) setVehicleNo(grn.vehicleNo);
+      if (grn.driverName) setDriverName(grn.driverName);
+      if (grn.transporter) setTransporter(grn.transporter);
+      if (grn.grossWeight) setGrossWeight(grn.grossWeight);
+      if (grn.tareWeight) setTareWeight(grn.tareWeight);
+      if (grn.netWeight) setNetWeight(grn.netWeight);
+    }
   };
 
-  // Handle URL query parameters for direct PO/QC-to-Invoice conversion
+  // Handle URL query parameters for direct PO conversion
   const poQueryParam = searchParams.get('po');
-  const qcQueryParam = searchParams.get('qc');
   const actionQueryParam = searchParams.get('action');
   useEffect(() => {
-    if (qcQueryParam) {
-      api.get(`/quality-control/${qcQueryParam}`).then(res => {
-        if (res.data?.data) {
-          populateItemsFromQC(res.data.data);
-          setIsCreateOpen(true);
-        }
-      }).catch(() => {
-        const found = (qcList || []).find((q: any) => (q._id || q.id) === qcQueryParam || q.qcNumber === qcQueryParam);
-        if (found) {
-          populateItemsFromQC(found);
-          setIsCreateOpen(true);
-        }
-      });
-    } else if (poQueryParam) {
+    if (poQueryParam) {
       const po = db.purchaseOrders.find(p => p.id === poQueryParam || p.poNo === poQueryParam);
       if (po) {
         setPoNo(po.poNo);
         setGrnNo('');
         populateItemsFromPo(po);
+        const matchedGrn = db.grns.find(g => (g.poNo === po.poNo || g.poId === po.id));
+        if (matchedGrn) {
+          if (matchedGrn.vehicleNo) setVehicleNo(matchedGrn.vehicleNo);
+          if (matchedGrn.driverName) setDriverName(matchedGrn.driverName);
+          if (matchedGrn.transporter) setTransporter(matchedGrn.transporter);
+          if (matchedGrn.grossWeight) setGrossWeight(matchedGrn.grossWeight);
+          if (matchedGrn.tareWeight) setTareWeight(matchedGrn.tareWeight);
+          if (matchedGrn.netWeight) setNetWeight(matchedGrn.netWeight);
+        }
         setIsCreateOpen(true);
       }
     } else if (actionQueryParam === 'new') {
       setIsCreateOpen(true);
     }
-  }, [poQueryParam, qcQueryParam, actionQueryParam, db.purchaseOrders, qcList]);
+  }, [poQueryParam, actionQueryParam, db.purchaseOrders]);
 
   // Edit quantity or rate inside invoice form
-  const handleItemValueChange = (index: number, field: 'invoiceQty' | 'rate' | 'baseRate' | 'qualityRebatePerUnit' | 'settledRate' | 'discount' | 'taxPercent', val: number) => {
+  const handleItemValueChange = (index: number, field: 'invoiceQty' | 'rate' | 'discount' | 'taxPercent', val: number) => {
     setItemsList(prev => {
       const updated = [...prev];
       const item = { ...updated[index] };
       if (field === 'invoiceQty') item.invoiceQty = val;
-      if (field === 'rate') item.rate = val;
-      if (field === 'baseRate') item.baseRate = val;
-      if (field === 'qualityRebatePerUnit') item.qualityRebatePerUnit = val;
-      if (field === 'settledRate') {
-        item.settledRate = val;
+      if (field === 'rate') {
         item.rate = val;
+        item.baseRate = val;
+        item.settledRate = val;
       }
       if (field === 'discount') item.discount = val;
       if (field === 'taxPercent') item.taxPercent = Math.max(0, val);
 
-      // Auto-recompute rate from baseRate - qualityRebatePerUnit if both are set
-      if (item.baseRate !== undefined && item.qualityRebatePerUnit !== undefined && field !== 'settledRate' && field !== 'rate') {
-        item.settledRate = Math.max(0, item.baseRate - item.qualityRebatePerUnit);
-        item.rate = item.settledRate;
-      }
-
-      item.qualityRebateTotal = (item.qualityRebatePerUnit || 0) * (item.invoiceQty || 0);
-      const sub = (item.invoiceQty || 0) * (item.rate || item.settledRate || 0);
+      const sub = (item.invoiceQty || 0) * (item.rate || 0);
       const taxRate = item.taxPercent !== undefined ? item.taxPercent : 0;
       item.taxAmount = Math.round(sub * (taxRate / 100));
       item.amount = sub + item.taxAmount - (item.discount || 0);
@@ -297,12 +246,12 @@ export default function PurchaseInvoicesPage() {
   };
 
   // Totals calculations
-  const baseSubtotal = itemsList.reduce((sum, i) => sum + ((i.baseRate !== undefined ? i.baseRate : i.rate) * i.invoiceQty), 0);
-  const totalQualityRebateDeduction = itemsList.reduce((sum, i) => sum + (i.qualityRebateTotal || ((i.qualityRebatePerUnit || 0) * i.invoiceQty)), 0);
-  const subtotal = itemsList.reduce((sum, i) => sum + (i.invoiceQty * (i.rate || i.settledRate || 0)), 0);
+  const subtotal = itemsList.reduce((sum, i) => sum + (i.invoiceQty * (i.rate || 0)), 0);
   const totalTax = itemsList.reduce((sum, i) => sum + i.taxAmount, 0);
   const totalCharges = Number(freight) + Number(otherCharges);
   const grandTotal = subtotal + totalTax + totalCharges - Number(discount);
+  const baseSubtotal = subtotal;
+  const totalQualityRebateDeduction = 0;
 
   // Find active QC record if selected
   const activeQc = useMemo(() => {
@@ -320,6 +269,16 @@ export default function PurchaseInvoicesPage() {
     setOtherCharges(selectedInvoice.otherCharges || 0);
     setDiscount(selectedInvoice.discount || 0);
     setRemarks(selectedInvoice.remarks || '');
+    setVehicleNo(selectedInvoice.vehicleNo || '');
+    setDriverName(selectedInvoice.driverName || '');
+    setDriverPhone(selectedInvoice.driverPhone || '');
+    setTransporter(selectedInvoice.transporter || '');
+    setLrNumber(selectedInvoice.lrNumber || '');
+    setLrDate(selectedInvoice.lrDate || '');
+    setEwayBillNo(selectedInvoice.ewayBillNo || '');
+    setGrossWeight(selectedInvoice.grossWeight || 0);
+    setTareWeight(selectedInvoice.tareWeight || 0);
+    setNetWeight(selectedInvoice.netWeight || 0);
     setItemsList(selectedInvoice.items || []);
     setIsEditMode(true);
     setIsViewMode(false);
@@ -336,6 +295,16 @@ export default function PurchaseInvoicesPage() {
     setOtherCharges(selectedInvoice.otherCharges || 0);
     setDiscount(selectedInvoice.discount || 0);
     setRemarks(selectedInvoice.remarks || '');
+    setVehicleNo(selectedInvoice.vehicleNo || '');
+    setDriverName(selectedInvoice.driverName || '');
+    setDriverPhone(selectedInvoice.driverPhone || '');
+    setTransporter(selectedInvoice.transporter || '');
+    setLrNumber(selectedInvoice.lrNumber || '');
+    setLrDate(selectedInvoice.lrDate || '');
+    setEwayBillNo(selectedInvoice.ewayBillNo || '');
+    setGrossWeight(selectedInvoice.grossWeight || 0);
+    setTareWeight(selectedInvoice.tareWeight || 0);
+    setNetWeight(selectedInvoice.netWeight || 0);
     setItemsList(selectedInvoice.items || []);
     setIsEditMode(false);
     setIsViewMode(true);
@@ -376,6 +345,18 @@ export default function PurchaseInvoicesPage() {
         otherCharges: Number(otherCharges),
         discount: Number(discount),
         remarks,
+        vehicleNo,
+        driverName,
+        driverPhone,
+        transporter,
+        lrNumber,
+        lrDate,
+        ewayBillNo,
+        grossWeight: Number(grossWeight || 0),
+        tareWeight: Number(tareWeight || 0),
+        netWeight: Number(netWeight || (grossWeight && tareWeight ? Math.max(0, grossWeight - tareWeight) : 0)),
+        isFinalInvoice: false,
+        invoiceType: 'Preliminary',
         subtotal,
         baseSubtotal,
         qualityRebateDeduction: totalQualityRebateDeduction,
@@ -396,6 +377,16 @@ export default function PurchaseInvoicesPage() {
       setQcId('');
       setQcNo('');
       setGrnNo('');
+      setVehicleNo('');
+      setDriverName('');
+      setDriverPhone('');
+      setTransporter('');
+      setLrNumber('');
+      setLrDate('');
+      setEwayBillNo('');
+      setGrossWeight(0);
+      setTareWeight(0);
+      setNetWeight(0);
       setItemsList([]);
       setSelectedInvoice(updatedInvoice);
       showToast(`Invoice ${invoiceNo} updated successfully! Status: ${updatedInvoice.status}`, 'success');
@@ -439,6 +430,18 @@ export default function PurchaseInvoicesPage() {
       otherCharges: Number(otherCharges),
       roundOff: 0,
       grandTotal,
+      vehicleNo,
+      driverName,
+      driverPhone,
+      transporter,
+      lrNumber,
+      lrDate,
+      ewayBillNo,
+      grossWeight: Number(grossWeight || 0),
+      tareWeight: Number(tareWeight || 0),
+      netWeight: Number(netWeight || (grossWeight && tareWeight ? Math.max(0, grossWeight - tareWeight) : 0)),
+      isFinalInvoice: false,
+      invoiceType: 'Preliminary',
       status: 'Matched',
       items: itemsList,
       remarks
@@ -460,6 +463,17 @@ export default function PurchaseInvoicesPage() {
     setPoNo('');
     setQcId('');
     setQcNo('');
+    setGrnNo('');
+    setVehicleNo('');
+    setDriverName('');
+    setDriverPhone('');
+    setTransporter('');
+    setLrNumber('');
+    setLrDate('');
+    setEwayBillNo('');
+    setGrossWeight(0);
+    setTareWeight(0);
+    setNetWeight(0);
     setItemsList([]);
     setSelectedInvoice(newInvoice);
     showToast(`Purchase Invoice ${invoiceNo} generated directly from Purchase Order ${poNumber}!`, 'success');
@@ -513,100 +527,6 @@ export default function PurchaseInvoicesPage() {
     showToast(`Invoice marked as Disputed`, 'error');
   };
 
-  // Submit payment tracking record
-  const handleRecordPayment = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedInvoice) return;
-    const remaining = selectedInvoice.remainingAmount !== undefined ? selectedInvoice.remainingAmount : selectedInvoice.grandTotal;
-    if (paymentAmount <= 0) {
-      showToast('Please enter a valid payment amount', 'error');
-      return;
-    }
-    if (paymentAmount > remaining) {
-      showToast(`Payment amount cannot exceed remaining balance (₹${remaining.toLocaleString()})`, 'error');
-      return;
-    }
-
-    const currentPaid = selectedInvoice.amountPaid || 0;
-    const newPaid = currentPaid + paymentAmount;
-    const newRemaining = remaining - paymentAmount;
-    const newStatus = newRemaining === 0 ? 'Paid' : 'Partially Paid';
-
-    const newPayment = {
-      date: paymentDate,
-      reference: paymentReference,
-      mode: paymentMode,
-      account: paymentAccount,
-      amount: paymentAmount,
-      notes: paymentNotes
-    };
-
-    const updatedInvoice: PurchaseInvoice = {
-      ...selectedInvoice,
-      amountPaid: newPaid,
-      remainingAmount: newRemaining,
-      status: newStatus,
-      paymentHistory: [...(selectedInvoice.paymentHistory || []), newPayment]
-    };
-
-    // Update Invoice in ERP DB
-    erpService.purchaseInvoices.update(updatedInvoice);
-
-    // Deduct from supplier / farmer accounts payable balance (Business Rule 9) & post Financial Voucher
-    const partyName = selectedInvoice.partyType === 'supplier'
-      ? suppliers.find(s => s.id === selectedInvoice.supplierId)?.name || 'Supplier'
-      : farmers.find(f => f.id === selectedInvoice.supplierId)?.name || 'Farmer';
-
-    if (selectedInvoice.partyType === 'supplier') {
-      const sup = db.suppliers.find(s => s.id === selectedInvoice.supplierId);
-      if (sup) {
-        sup.balance = Math.max(0, sup.balance - paymentAmount);
-        erpService.suppliers.update(sup);
-      }
-    } else {
-      const farmer = db.farmers.find(f => f.id === selectedInvoice.supplierId);
-      if (farmer) {
-        farmer.balance = Math.max(0, farmer.balance - paymentAmount);
-        erpService.farmers.update(farmer);
-      }
-    }
-
-    // Automatically post Payment Voucher to Finance Module (/finance/payments, /finance/ledger)
-    erpService.postVoucher({
-      voucherType: 'Payment',
-      date: paymentDate || new Date().toISOString().split('T')[0],
-      referenceNo: selectedInvoice.invoiceNo,
-      partyId: selectedInvoice.supplierId,
-      partyType: selectedInvoice.partyType || 'supplier',
-      amount: paymentAmount,
-      paymentMode: paymentMode as any,
-      cashBankLink: paymentAccount || 'HDFC Bank Oper A/c',
-      debitAccount: `${partyName} Accounts Payable`,
-      creditAccount: paymentAccount || 'HDFC Bank Oper A/c',
-      narration: `Payment settlement for Purchase Invoice ${selectedInvoice.invoiceNo} (PO Ref: ${selectedInvoice.poNumber || 'N/A'})${paymentNotes ? ' - ' + paymentNotes : ''}`
-    }, currentUserRole);
-
-    // Update linked PO payment notes if full settlement
-    if (selectedInvoice.poNumber) {
-      const po = db.purchaseOrders.find(p => p.poNo === selectedInvoice.poNumber);
-      if (po) {
-        if (newRemaining === 0) {
-          po.paymentTerms = `${po.paymentTerms || ''} (Paid: ₹${newPaid.toLocaleString()})`.trim();
-        }
-        erpService.purchaseOrders.update(po);
-      }
-    }
-
-    // Refresh, close, and reset
-    refreshDb();
-    setSelectedInvoice(updatedInvoice);
-    setIsPaymentModalOpen(false);
-    setPaymentAmount(0);
-    setPaymentReference('');
-    setPaymentNotes('');
-    showToast(`Payment of ₹${paymentAmount.toLocaleString()} recorded & posted to Finance Payments & Ledger!`, 'success');
-  };
-
   // Verification results
   const verificationResult = useMemo(() => {
     if (!selectedInvoice) return null;
@@ -629,11 +549,15 @@ export default function PurchaseInvoicesPage() {
     return linkedGrn.inwardStatus === 'Completed' || linkedGrn.status === 'Completed' || linkedGrn.status === 'Accepted';
   }, [linkedGrn]);
 
-  // Tab filter logic
+  // Tab filter logic: Preliminary only (not Final)
+  const preliminaryInvoices = useMemo(() => {
+    return (db.purchaseInvoices || []).filter(inv => !inv.isFinalInvoice && inv.invoiceType !== 'Final');
+  }, [db.purchaseInvoices]);
+
   const filteredInvoices = useMemo(() => {
-    if (activeTab === 'All') return db.purchaseInvoices;
-    return db.purchaseInvoices.filter(inv => inv.status === activeTab);
-  }, [db.purchaseInvoices, activeTab]);
+    if (activeTab === 'All') return preliminaryInvoices;
+    return preliminaryInvoices.filter(inv => inv.status === activeTab);
+  }, [preliminaryInvoices, activeTab]);
 
   const columns = [
     { header: 'Invoice Number', accessor: 'invoiceNo' as keyof PurchaseInvoice, sortable: true },
@@ -651,6 +575,20 @@ export default function PurchaseInvoicesPage() {
       accessor: (row: PurchaseInvoice) => (
         <span className="font-mono text-xs font-bold text-slate-800">{row.poNumber || '-'}</span>
       )
+    },
+    { 
+      header: 'Vehicle / Transport', 
+      accessor: (row: PurchaseInvoice) => {
+        const veh = row.vehicleNo || (db.grns.find(g => (row.grnNumber && g.grnNo === row.grnNumber) || g.poNo === row.poNumber)?.vehicleNo);
+        const trans = row.transporter || (db.grns.find(g => (row.grnNumber && g.grnNo === row.grnNumber) || g.poNo === row.poNumber)?.transporter);
+        if (!veh && !trans) return <span className="text-slate-300 font-mono text-[10px]">-</span>;
+        return (
+          <div className="text-xs">
+            {veh && <div className="font-mono text-[11px] font-bold text-slate-800 flex items-center gap-1"><Truck size={12} className="text-primary-600 shrink-0" />{veh}</div>}
+            {trans && <div className="text-[10px] text-slate-400 font-medium truncate max-w-[120px]">{trans}</div>}
+          </div>
+        );
+      }
     },
     { 
       header: 'GRN Status', 
@@ -726,9 +664,21 @@ export default function PurchaseInvoicesPage() {
     doc.text(`Invoice Date:   ${formatDate(invoice.invoiceDate)}`, 14, 52);
     doc.text(`Due Date:       ${formatDate(invoice.dueDate)}`, 14, 58);
     doc.text(`PO Number:      ${invoice.poNumber || 'N/A'}`, 14, 64);
-    doc.text(`QC Slip Ref:    ${invoice.qcNumber || 'N/A (Direct PO)'}`, 14, 70);
-    doc.text(`GRN Number:     ${invoice.grnNumber || 'N/A'}`, 14, 76);
-    doc.text(`Match Status:   ${invoice.status}`, 14, 82);
+    doc.text(`GRN Number:     ${invoice.grnNumber || 'N/A'}`, 14, 70);
+    doc.text(`Match Status:   ${invoice.status}`, 14, 76);
+
+    // Vehicle Details in PDF on right column
+    if (invoice.vehicleNo || invoice.transporter || invoice.lrNumber || invoice.ewayBillNo) {
+      doc.setFont("Helvetica", "bold");
+      doc.text("VEHICLE & LOGISTICS:", 115, 46);
+      doc.setFont("Helvetica", "normal");
+      if (invoice.vehicleNo) doc.text(`Vehicle No:    ${invoice.vehicleNo}`, 115, 52);
+      if (invoice.driverName) doc.text(`Driver:        ${invoice.driverName}${invoice.driverPhone ? ' (' + invoice.driverPhone + ')' : ''}`, 115, 58);
+      if (invoice.transporter) doc.text(`Transporter:   ${invoice.transporter}`, 115, 64);
+      if (invoice.lrNumber) doc.text(`LR/Bilty No:   ${invoice.lrNumber}`, 115, 70);
+      if (invoice.ewayBillNo) doc.text(`E-Way Bill:    ${invoice.ewayBillNo}`, 115, 76);
+      if (invoice.netWeight) doc.text(`Net Weight:    ${invoice.netWeight} MT`, 115, 82);
+    }
 
     const supName = invoice.partyType === 'supplier'
       ? suppliers.find(s => s.id === invoice.supplierId)?.name
@@ -748,10 +698,9 @@ export default function PurchaseInvoicesPage() {
     doc.setFont("Helvetica", "bold");
     doc.setFontSize(8);
     doc.text("Item Details", 16, tableTop + 5.5);
-    doc.text("Billed Qty", 85, tableTop + 5.5, { align: "right" });
-    doc.text("Base Rate", 110, tableTop + 5.5, { align: "right" });
-    doc.text("QC Rebate", 135, tableTop + 5.5, { align: "right" });
-    doc.text("Settled Rate", 165, tableTop + 5.5, { align: "right" });
+    doc.text("Billed Qty", 95, tableTop + 5.5, { align: "right" });
+    doc.text("Unit Rate", 130, tableTop + 5.5, { align: "right" });
+    doc.text("GST Tax", 160, tableTop + 5.5, { align: "right" });
     doc.text("Line Total", 194, tableTop + 5.5, { align: "right" });
 
     doc.setDrawColor(226, 232, 240);
@@ -760,17 +709,14 @@ export default function PurchaseInvoicesPage() {
     let itemY = tableTop + 14;
     invoice.items.forEach(it => {
       const commName = commodities.find(c => c.id === it.item || c._id === it.item)?.name || it.item;
-      const baseR = it.baseRate !== undefined ? it.baseRate : it.rate;
-      const rebateR = it.qualityRebatePerUnit || 0;
-      const settledR = it.settledRate || it.rate;
+      const unitR = it.rate || it.settledRate || it.baseRate || 0;
 
       doc.setFont("Helvetica", "bold");
       doc.text(commName, 16, itemY);
       doc.setFont("Helvetica", "normal");
-      doc.text(`${it.invoiceQty}`, 85, itemY, { align: "right" });
-      doc.text(`₹${baseR.toLocaleString()}`, 110, itemY, { align: "right" });
-      doc.text(rebateR > 0 ? `-₹${rebateR.toLocaleString()}` : "₹0", 135, itemY, { align: "right" });
-      doc.text(`₹${settledR.toLocaleString()}`, 165, itemY, { align: "right" });
+      doc.text(`${it.invoiceQty}`, 95, itemY, { align: "right" });
+      doc.text(`₹${unitR.toLocaleString()}`, 130, itemY, { align: "right" });
+      doc.text(`₹${(it.taxAmount || 0).toLocaleString()}`, 160, itemY, { align: "right" });
       doc.text(`₹${it.amount.toLocaleString()}`, 194, itemY, { align: "right" });
       itemY += 8;
     });
@@ -778,21 +724,7 @@ export default function PurchaseInvoicesPage() {
     doc.line(14, itemY - 3, 196, itemY - 3);
 
     const summaryX = 130;
-    if (invoice.baseSubtotal) {
-      doc.text("Gross Base Subtotal:", summaryX, itemY + 2);
-      doc.text(`₹${invoice.baseSubtotal.toLocaleString()}`, 194, itemY + 2, { align: "right" });
-      itemY += 6;
-    }
-
-    if (invoice.qualityRebateDeduction && invoice.qualityRebateDeduction > 0) {
-      doc.setTextColor(225, 29, 72);
-      doc.text("QC Rebate Deduction:", summaryX, itemY + 2);
-      doc.text(`-₹${invoice.qualityRebateDeduction.toLocaleString()}`, 194, itemY + 2, { align: "right" });
-      doc.setTextColor(71, 85, 105);
-      itemY += 6;
-    }
-
-    doc.text("Net Taxable Subtotal:", summaryX, itemY + 2);
+    doc.text("Subtotal:", summaryX, itemY + 2);
     doc.text(`₹${invoice.subtotal.toLocaleString()}`, 194, itemY + 2, { align: "right" });
     
     doc.text("Freight charges:", summaryX, itemY + 8);
@@ -800,6 +732,12 @@ export default function PurchaseInvoicesPage() {
 
     doc.text("GST Taxes:", summaryX, itemY + 14);
     doc.text(`₹${(invoice.cgst * 2).toLocaleString()}`, 194, itemY + 14, { align: "right" });
+
+    if (invoice.discount && invoice.discount > 0) {
+      doc.text("Discount:", summaryX, itemY + 20);
+      doc.text(`-₹${invoice.discount.toLocaleString()}`, 194, itemY + 20, { align: "right" });
+      itemY += 6;
+    }
 
     doc.line(120, itemY + 18, 196, itemY + 18);
     doc.setFont("Helvetica", "bold");
@@ -839,8 +777,8 @@ export default function PurchaseInvoicesPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-800">Purchase Invoices (From Purchase Orders)</h1>
-          <p className="text-xs font-medium text-slate-400">Log commercial supplier invoices directly against approved Purchase Orders (PO) and record vendor payments.</p>
+          <h1 className="text-xl font-bold tracking-tight text-slate-800">Purchase Invoices (Without QC)</h1>
+          <p className="text-xs font-medium text-slate-400">Log preliminary vendor commercial bills against Purchase Orders prior to Quality Control and GRN weighbridge inward.</p>
         </div>
         <button
           onClick={() => {
@@ -855,6 +793,16 @@ export default function PurchaseInvoicesPage() {
             setOtherCharges(0);
             setDiscount(0);
             setRemarks('');
+            setVehicleNo('');
+            setDriverName('');
+            setDriverPhone('');
+            setTransporter('');
+            setLrNumber('');
+            setLrDate('');
+            setEwayBillNo('');
+            setGrossWeight(0);
+            setTareWeight(0);
+            setNetWeight(0);
             setIsEditMode(false);
             setIsCreateOpen(true);
           }}
@@ -924,7 +872,7 @@ export default function PurchaseInvoicesPage() {
                     {verificationResult.isMatch ? (
                       <>
                         <ShieldCheck size={15} className="text-emerald-600 animate-pulse" />
-                        <span>3-Way Match & QC Verification Passed</span>
+                        <span>3-Way Match Verification Passed</span>
                       </>
                     ) : (
                       <>
@@ -944,33 +892,6 @@ export default function PurchaseInvoicesPage() {
                 </div>
               )}
 
-              {/* QC Rebate Summary Banner if present */}
-              {(selectedInvoice.qualityRebateDeduction && selectedInvoice.qualityRebateDeduction > 0) || selectedInvoice.qcNumber ? (
-                <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3.5 space-y-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5 font-extrabold text-amber-900">
-                      <FlaskConical size={14} className="text-amber-600" />
-                      <span>QC Laboratory Settlement</span>
-                    </div>
-                    {selectedInvoice.qcNumber && (
-                      <span className="font-mono text-[10px] font-bold text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded border border-amber-300">
-                        {selectedInvoice.qcNumber}
-                      </span>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-[10px] font-semibold text-slate-600 pt-1 border-t border-amber-200/60">
-                    <div>
-                      <span className="text-slate-400 block">Gross Base Value</span>
-                      <span className="text-slate-800 font-bold">₹{(selectedInvoice.baseSubtotal || selectedInvoice.subtotal).toLocaleString()}</span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-slate-400 block">Quality Rebate Deduction</span>
-                      <span className="text-rose-600 font-extrabold">-₹{(selectedInvoice.qualityRebateDeduction || 0).toLocaleString()}</span>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-
               {/* Header Info */}
               <div className="space-y-2 text-xs font-semibold text-slate-600 border-b border-slate-100 pb-3.5">
                 <div className="flex justify-between">
@@ -985,12 +906,6 @@ export default function PurchaseInvoicesPage() {
                   <span className="text-slate-400">PO Link:</span>
                   <span className="font-mono text-[10px] bg-slate-100 px-1 py-0.2 rounded font-bold">{selectedInvoice.poNumber || 'N/A'}</span>
                 </div>
-                {selectedInvoice.qcNumber && (
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">QC Inspection Slip:</span>
-                    <span className="font-mono text-[10px] bg-amber-50 text-amber-800 border border-amber-200 px-1.5 py-0.2 rounded font-bold">{selectedInvoice.qcNumber}</span>
-                  </div>
-                )}
                 <div className="flex justify-between">
                   <span className="text-slate-400">GRN Link:</span>
                   <span className="font-mono text-[10px] bg-slate-100 px-1 py-0.2 rounded font-bold">{selectedInvoice.grnNumber || 'N/A'}</span>
@@ -1005,27 +920,68 @@ export default function PurchaseInvoicesPage() {
                 </div>
               </div>
 
+              {/* Vehicle & Logistics Details */}
+              {(selectedInvoice.vehicleNo || selectedInvoice.transporter || selectedInvoice.driverName || selectedInvoice.lrNumber || selectedInvoice.ewayBillNo || linkedGrn?.vehicleNo) && (
+                <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5 space-y-2 text-xs animate-fade-in">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 font-extrabold text-slate-800">
+                      <Truck size={14} className="text-primary-600" />
+                      <span>Vehicle & Transport Logistics</span>
+                    </div>
+                    {(selectedInvoice.vehicleNo || linkedGrn?.vehicleNo) && (
+                      <span className="font-mono text-[10px] font-bold bg-primary-50 text-primary-700 border border-primary-200 px-2 py-0.5 rounded">
+                        {selectedInvoice.vehicleNo || linkedGrn?.vehicleNo}
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[10px] font-semibold text-slate-600 pt-1 border-t border-slate-200/60">
+                    {selectedInvoice.driverName && (
+                      <div>
+                        <span className="text-slate-400 block">Driver</span>
+                        <span className="text-slate-800 font-bold">{selectedInvoice.driverName} {selectedInvoice.driverPhone ? `(${selectedInvoice.driverPhone})` : ''}</span>
+                      </div>
+                    )}
+                    {selectedInvoice.transporter && (
+                      <div>
+                        <span className="text-slate-400 block">Transporter / Carrier</span>
+                        <span className="text-slate-800 font-bold">{selectedInvoice.transporter}</span>
+                      </div>
+                    )}
+                    {selectedInvoice.lrNumber && (
+                      <div>
+                        <span className="text-slate-400 block">LR / Bilty No</span>
+                        <span className="text-slate-800 font-bold">{selectedInvoice.lrNumber} {selectedInvoice.lrDate ? `(${formatDate(selectedInvoice.lrDate)})` : ''}</span>
+                      </div>
+                    )}
+                    {selectedInvoice.ewayBillNo && (
+                      <div>
+                        <span className="text-slate-400 block">E-Way Bill</span>
+                        <span className="text-slate-800 font-bold">{selectedInvoice.ewayBillNo}</span>
+                      </div>
+                    )}
+                    {((selectedInvoice.netWeight && selectedInvoice.netWeight > 0) || (selectedInvoice.grossWeight && selectedInvoice.grossWeight > 0)) && (
+                      <div className="col-span-2 bg-white p-2 rounded-lg border border-slate-200/80 flex justify-between items-center text-[10px] mt-1">
+                        <span>Gross: <b>{selectedInvoice.grossWeight || 0} MT</b></span>
+                        <span>Tare: <b>{selectedInvoice.tareWeight || 0} MT</b></span>
+                        <span className="text-emerald-700 font-extrabold">Net Wt: {selectedInvoice.netWeight || ((selectedInvoice.grossWeight || 0) - (selectedInvoice.tareWeight || 0))} MT</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Items Table */}
               <div className="border border-slate-150 rounded-xl p-4 bg-slate-50/50 space-y-3">
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Billed Invoice Items</span>
                 <div className="space-y-3 max-h-[160px] overflow-y-auto pr-1">
                   {selectedInvoice.items.map((item, idx) => {
-                    const baseRate = item.baseRate !== undefined ? item.baseRate : item.rate;
-                    const rebate = item.qualityRebatePerUnit || 0;
-                    const settledRate = item.settledRate || item.rate;
+                    const unitRate = item.rate || item.settledRate || item.baseRate || 0;
                     return (
                       <div key={idx} className="text-xs border-b border-slate-100 pb-2 last:border-0 last:pb-0 space-y-1">
                         <div className="flex justify-between font-bold text-slate-800">
                           <span>{commodities.find(c => c.id === item.item || c._id === item.item)?.name || item.item}</span>
-                          <span>₹{settledRate.toLocaleString()} / Unit</span>
+                          <span>₹{unitRate.toLocaleString()} / Unit</span>
                         </div>
-                        {rebate > 0 && (
-                          <div className="flex items-center gap-1.5 text-[9px] font-semibold text-slate-500">
-                            <span>Base: ₹{baseRate}</span>
-                            <span className="text-rose-600 font-bold">- Rebate: ₹{rebate}/MT</span>
-                            <span className="text-emerald-700 font-bold">= Net: ₹{settledRate}/MT</span>
-                          </div>
-                        )}
                         <div className="grid grid-cols-3 text-[10px] font-semibold text-slate-500 leading-tight">
                           <span>PO Ordered: {item.poQty}</span>
                           <span>GRN Accepted: {item.receivedQty}</span>
@@ -1057,38 +1013,37 @@ export default function PurchaseInvoicesPage() {
                     <span>Total Invoice Amount:</span>
                     <span className="text-slate-800">₹{(selectedInvoice.grandTotal ?? 0).toLocaleString()}</span>
                   </div>
-                  <div className="flex justify-between text-emerald-600 font-bold">
-                    <span>Total Paid:</span>
-                    <span>₹{(selectedInvoice.amountPaid ?? 0).toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between text-rose-600 font-bold border-t border-slate-100 pt-1.5 mt-1.5">
-                    <span>Outstanding Balance:</span>
-                    <span>₹{(selectedInvoice.remainingAmount !== undefined ? selectedInvoice.remainingAmount : selectedInvoice.grandTotal).toLocaleString()}</span>
+                  <div className="flex justify-between font-bold text-slate-800">
+                    <span>Total Preliminary Value:</span>
+                    <span>₹{(selectedInvoice.grandTotal ?? 0).toLocaleString()}</span>
                   </div>
                 </div>
               )}
 
-              {/* Payment History Log */}
-              {selectedInvoice.paymentHistory && selectedInvoice.paymentHistory.length > 0 && (
-                <div className="border border-slate-150 rounded-xl p-4 bg-slate-50/50 space-y-2.5">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Payment History logs</span>
-                  <div className="space-y-2 max-h-[120px] overflow-y-auto pr-1">
-                    {selectedInvoice.paymentHistory.map((p, idx) => (
-                      <div key={idx} className="text-[10px] border-b border-slate-100/50 pb-2 last:border-0 last:pb-0 space-y-0.5 leading-normal font-semibold">
-                        <div className="flex justify-between font-bold text-slate-700">
-                          <span>{p.mode} ({p.account})</span>
-                          <span className="text-emerald-600 font-extrabold">₹{p.amount.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between text-slate-400">
-                          <span>Ref: {p.reference || 'N/A'}</span>
-                          <span>{formatDate(p.date)}</span>
-                        </div>
-                        {p.notes && <div className="text-slate-400 italic">"{p.notes}"</div>}
-                      </div>
-                    ))}
-                  </div>
+              {/* Next Workflow Steps: Pre-QC Invoice progresses to QC and Inward GRN */}
+              <div className="border border-blue-100 bg-blue-50/50 rounded-xl p-3.5 space-y-2 text-xs">
+                <div className="flex items-center gap-1.5 font-bold text-blue-900 text-[11px]">
+                  <ArrowRight size={13} className="text-blue-600" />
+                  <span>Next Procurement Steps</span>
                 </div>
-              )}
+                <p className="text-[10px] text-blue-700">
+                  This is a <b>Pre-QC Preliminary Invoice</b>. Final settled billing and vendor payment clearance will be processed in <b>Final Invoices (With QC)</b> &amp; <b>Vendor Payments</b>.
+                </p>
+                <div className="flex flex-col gap-1.5 pt-1">
+                  <button
+                    onClick={() => router.push(`/procurement/qc?invoice=${selectedInvoice.invoiceNo}&po=${selectedInvoice.poNumber}`)}
+                    className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-sm transition cursor-pointer"
+                  >
+                    <span>Step 5: Perform Quality Inspection (QC)</span>
+                  </button>
+                  <button
+                    onClick={() => router.push(`/procurement/grn?invoice=${selectedInvoice.invoiceNo}&po=${selectedInvoice.poNumber}`)}
+                    className="w-full py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 border border-slate-200 transition cursor-pointer"
+                  >
+                    <span>Step 6: Inward Vehicle at GRN Gate</span>
+                  </button>
+                </div>
+              </div>
 
               {/* Actions */}
               <div className="space-y-2 pt-4 border-t border-slate-100">
@@ -1116,26 +1071,6 @@ export default function PurchaseInvoicesPage() {
                     <Edit3 size={14} />
                     <span>Edit Invoice</span>
                   </button>
-                )}
-
-                {/* Payment Action */}
-                {selectedInvoice.status !== 'Paid' ? (
-                  <button
-                    onClick={() => {
-                      const remaining = selectedInvoice.remainingAmount !== undefined ? selectedInvoice.remainingAmount : selectedInvoice.grandTotal;
-                      setPaymentAmount(remaining);
-                      setIsPaymentModalOpen(true);
-                    }}
-                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/10 cursor-pointer transition mb-2"
-                  >
-                    <Wallet size={14} />
-                    <span>Record Vendor Payment</span>
-                  </button>
-                ) : (
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2.5 text-center text-xs font-bold text-emerald-800 flex items-center justify-center gap-1.5 mb-2">
-                    <CheckCircle size={14} className="text-emerald-600" />
-                    <span>Vendor Paid in Full</span>
-                  </div>
                 )}
 
                 {(selectedInvoice.status === 'Matched' || selectedInvoice.status === 'Mismatch' || selectedInvoice.status === 'Disputed') && currentUserRole === 'Super Admin' && (
@@ -1255,16 +1190,152 @@ export default function PurchaseInvoicesPage() {
                 </div>
               </div>
 
+              {/* Vehicle & Logistics Section */}
+              <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 font-bold text-xs text-slate-800">
+                    <Truck size={15} className="text-primary-600" />
+                    <span>Vehicle & Transport Logistics</span>
+                  </div>
+                  <span className="text-[10px] text-slate-400 font-medium">Inward transport, bilty & weighbridge scale readings</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block mb-1">Vehicle / Truck No</label>
+                    <input
+                      type="text"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white font-semibold text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      value={vehicleNo}
+                      onChange={e => setVehicleNo(e.target.value.toUpperCase())}
+                      placeholder="e.g. BR-01-GB-4590"
+                      disabled={isViewMode}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block mb-1">Driver Name</label>
+                    <input
+                      type="text"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      value={driverName}
+                      onChange={e => setDriverName(e.target.value)}
+                      placeholder="e.g. Ramesh Kumar"
+                      disabled={isViewMode}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block mb-1">Driver Phone / Mobile</label>
+                    <input
+                      type="text"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      value={driverPhone}
+                      onChange={e => setDriverPhone(e.target.value)}
+                      placeholder="e.g. +91 98765 43210"
+                      disabled={isViewMode}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block mb-1">Transporter / Carrier</label>
+                    <input
+                      type="text"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      value={transporter}
+                      onChange={e => setTransporter(e.target.value)}
+                      placeholder="e.g. Patna Roadways Logistics"
+                      disabled={isViewMode}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block mb-1">LR / Bilty Number</label>
+                    <input
+                      type="text"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      value={lrNumber}
+                      onChange={e => setLrNumber(e.target.value)}
+                      placeholder="e.g. LR-98342"
+                      disabled={isViewMode}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block mb-1">LR Date</label>
+                    <IndianDateInput
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      value={lrDate}
+                      onChange={val => setLrDate(val)}
+                      disabled={isViewMode}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                  <div className="sm:col-span-1">
+                    <label className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block mb-1">E-Way Bill No</label>
+                    <input
+                      type="text"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      value={ewayBillNo}
+                      onChange={e => setEwayBillNo(e.target.value)}
+                      placeholder="e.g. 581290384192"
+                      disabled={isViewMode}
+                    />
+                  </div>
+
+                  <div className="sm:col-span-3 grid grid-cols-3 gap-2 bg-white p-2.5 rounded-lg border border-slate-200/80 items-end">
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Gross Wt (MT)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700"
+                        value={grossWeight || ''}
+                        onChange={e => handleGrossWeightChange(Number(e.target.value))}
+                        placeholder="0.00"
+                        disabled={isViewMode}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Tare Wt (MT)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700"
+                        value={tareWeight || ''}
+                        onChange={e => handleTareWeightChange(Number(e.target.value))}
+                        placeholder="0.00"
+                        disabled={isViewMode}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-bold text-emerald-600 uppercase block mb-1">Net Wt (MT)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        className="w-full px-2 py-1.5 border border-emerald-200 bg-emerald-50/40 text-emerald-800 rounded-lg text-xs font-bold"
+                        value={netWeight || (grossWeight && tareWeight ? Math.max(0, grossWeight - tareWeight) : '') || ''}
+                        onChange={e => setNetWeight(Number(e.target.value))}
+                        placeholder="0.00"
+                        disabled={isViewMode}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* Items grid */}
               {itemsList.length > 0 && (
                 <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 space-y-3">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase block tracking-wider">Configure billed quantities & unit rates (Acc. to QC)</span>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase block tracking-wider">Configure billed quantities & unit rates</span>
                   
                   <div className="space-y-3 font-semibold text-xs text-slate-700">
                     {itemsList.map((item, idx) => {
-                      const comm = commodities.find(c => c.id === item.item || c._id === item.item || c.name.toLowerCase() === (item.item || '').toLowerCase());
-                      const baseSub = (item.invoiceQty || 0) * (item.rate || item.settledRate || 0);
-                      const hasQcRebate = item.qualityRebatePerUnit !== undefined && item.qualityRebatePerUnit > 0;
+                      const comm = commodities.find(c => c.id === item.item || c._id === item.item || c.name?.toLowerCase() === (item.item || '').toLowerCase());
 
                       return (
                         <div key={idx} className="bg-white p-3.5 border border-slate-100 rounded-lg space-y-3 shadow-xs">
@@ -1276,18 +1347,13 @@ export default function PurchaseInvoicesPage() {
                                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
                                   : 'bg-indigo-50 text-indigo-700 border-indigo-200'
                               }`}>
-                                Base GST: {item.taxPercent || 0}%
+                                GST: {item.taxPercent || 0}%
                               </span>
-                              {hasQcRebate && (
-                                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-rose-50 text-rose-700 border border-rose-200">
-                                  QC Rebate: -₹{item.qualityRebatePerUnit}/MT
-                                </span>
-                              )}
                             </div>
                             <div className="text-[10px] text-slate-400 font-semibold space-x-2">
                               <span>PO Ordered: {item.poQty} MT</span>
                               {item.receivedQty > 0 ? (
-                                <span className="text-emerald-600">QC Passed: {item.receivedQty} MT</span>
+                                <span className="text-emerald-600">GRN Inwarded: {item.receivedQty} MT</span>
                               ) : (
                                 <span className="text-amber-600 font-medium">Awaiting GRN Inward</span>
                               )}
@@ -1306,43 +1372,30 @@ export default function PurchaseInvoicesPage() {
                                 disabled={isViewMode}
                               />
                             </div>
-                            <div className="col-span-2">
-                              <label className="text-[9px] font-bold text-slate-400 block mb-0.5">Base Rate (₹) *</label>
+                            <div className="col-span-3">
+                              <label className="text-[9px] font-bold text-slate-400 block mb-0.5">Unit Rate (₹) *</label>
                               <input
                                 type="number"
                                 className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold"
-                                value={item.baseRate !== undefined ? item.baseRate : item.rate || ''}
-                                onChange={e => handleItemValueChange(idx, 'baseRate', Number(e.target.value))}
+                                value={item.rate || ''}
+                                onChange={e => handleItemValueChange(idx, 'rate', Number(e.target.value))}
                                 required
                                 disabled={isViewMode}
                               />
                             </div>
-                            <div className="col-span-2">
-                              <label className="text-[9px] font-bold text-rose-500 block mb-0.5">QC Rebate (-₹)</label>
+                            <div className="col-span-3">
+                              <label className="text-[9px] font-bold text-slate-400 block mb-0.5">Discount (₹)</label>
                               <input
                                 type="number"
-                                className="w-full px-2 py-1.5 border border-rose-200 bg-rose-50/20 text-rose-700 rounded-lg text-xs font-semibold"
-                                value={item.qualityRebatePerUnit !== undefined ? item.qualityRebatePerUnit : 0}
-                                onChange={e => handleItemValueChange(idx, 'qualityRebatePerUnit', Number(e.target.value))}
-                                disabled={isViewMode}
-                              />
-                            </div>
-                            <div className="col-span-2">
-                              <label className="text-[9px] font-bold text-emerald-600 block mb-0.5">Net Rate (₹)</label>
-                              <input
-                                type="number"
-                                className="w-full px-2 py-1.5 border border-emerald-200 bg-emerald-50/30 text-emerald-800 rounded-lg text-xs font-bold"
-                                value={item.settledRate !== undefined ? item.settledRate : item.rate || ''}
-                                onChange={e => handleItemValueChange(idx, 'settledRate', Number(e.target.value))}
+                                className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold"
+                                value={item.discount || 0}
+                                onChange={e => handleItemValueChange(idx, 'discount', Number(e.target.value))}
                                 disabled={isViewMode}
                               />
                             </div>
                             <div className="col-span-3 text-right">
-                              <span className="text-[8px] font-bold text-slate-400 block mb-0.5">Settled Line Total</span>
+                              <span className="text-[8px] font-bold text-slate-400 block mb-0.5">Line Total (incl. GST)</span>
                               <span className="font-extrabold text-slate-800 block text-xs">₹{(item.amount ?? 0).toLocaleString()}</span>
-                              {hasQcRebate && (
-                                <span className="text-[9px] text-rose-600 font-medium block">(-₹{(item.qualityRebateTotal || (item.qualityRebatePerUnit! * item.invoiceQty)).toLocaleString()} QC cut)</span>
-                              )}
                             </div>
                           </div>
                         </div>
@@ -1357,18 +1410,12 @@ export default function PurchaseInvoicesPage() {
                 <div>
                   <span className="text-[10px] text-slate-400 uppercase block tracking-wider font-bold">Billed Grand Total Payable</span>
                   <span className="text-sm font-bold text-emerald-700">₹{grandTotal.toLocaleString()}</span>
-                  {totalQualityRebateDeduction > 0 && (
-                    <span className="text-[10px] text-rose-600 font-bold block mt-0.5">
-                      QC Lab Quality Rebate: -₹{totalQualityRebateDeduction.toLocaleString()}
-                    </span>
-                  )}
                 </div>
                 <div className="text-right text-[10px] text-slate-500 leading-normal font-semibold">
-                  <span>Gross Base Value: ₹{baseSubtotal.toLocaleString()}</span> <br />
-                  <span className="text-rose-600">QC Deduction: -₹{totalQualityRebateDeduction.toLocaleString()}</span> <br />
-                  <span>Net Settled Subtotal: ₹{subtotal.toLocaleString()}</span> <br />
+                  <span>Items Subtotal: ₹{subtotal.toLocaleString()}</span> <br />
                   <span>Freight Charges: ₹{totalCharges.toLocaleString()}</span> <br />
                   <span>GST Taxes: ₹{totalTax.toLocaleString()}</span>
+                  {Number(discount) > 0 && <><br /><span className="text-rose-600">Discount: -₹{Number(discount).toLocaleString()}</span></>}
                 </div>
               </div>
 
@@ -1399,127 +1446,6 @@ export default function PurchaseInvoicesPage() {
                     </button>
                   </>
                 )}
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-      {/* Record Payment Modal */}
-      {isPaymentModalOpen && selectedInvoice && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden animate-zoom-in">
-            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-800">Record Outgoing Vendor Payment (After GRN Inward)</h3>
-                <p className="text-[10px] text-slate-400 mt-0.5">Log voucher payment against invoice {selectedInvoice.invoiceNo} (GRN Ref: {linkedGrn?.grnNo || selectedInvoice.grnNumber || 'Verified'}).</p>
-              </div>
-              <button onClick={() => setIsPaymentModalOpen(false)} className="text-slate-400 hover:text-slate-600 font-bold">&times;</button>
-            </div>
-
-            <form onSubmit={handleRecordPayment} className="p-6 space-y-4">
-              <div>
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Outstanding Balance</label>
-                <div className="text-sm font-extrabold text-rose-600 bg-rose-50 border border-rose-100 px-3 py-2 rounded-lg">
-                  ₹{(selectedInvoice.remainingAmount !== undefined ? selectedInvoice.remainingAmount : selectedInvoice.grandTotal).toLocaleString()}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Amount Paid (₹) *</label>
-                  <input
-                    type="number"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-semibold text-slate-800 focus:outline-none"
-                    value={paymentAmount || ''}
-                    onChange={e => setPaymentAmount(Number(e.target.value))}
-                    max={selectedInvoice.remainingAmount !== undefined ? selectedInvoice.remainingAmount : selectedInvoice.grandTotal}
-                    min={1}
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Payment Date *</label>
-                  <IndianDateInput
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-750 focus:outline-none"
-                    value={paymentDate}
-                    onChange={val => setPaymentDate(val)}
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Payment Mode *</label>
-                  <select
-                    value={paymentMode}
-                    onChange={e => setPaymentMode(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-750 focus:outline-none"
-                    required
-                  >
-                    <option value="Bank Transfer">Bank Transfer</option>
-                    <option value="Cash">Cash</option>
-                    <option value="UPI">UPI</option>
-                    <option value="Cheque">Cheque</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Bank / Cash Account *</label>
-                  <select
-                    value={paymentAccount}
-                    onChange={e => setPaymentAccount(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-750 focus:outline-none"
-                    required
-                  >
-                    {paymentMode === 'Cash' ? (
-                      <option value="Petty Cash">Petty Cash</option>
-                    ) : (
-                      <>
-                        <option value="HDFC Bank A/c">HDFC Bank A/c</option>
-                        <option value="SBI Account">SBI Account</option>
-                        <option value="ICICI Current A/c">ICICI Current A/c</option>
-                      </>
-                    )}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Transaction Ref / Cheque No *</label>
-                <input
-                  type="text"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-750 focus:outline-none"
-                  value={paymentReference}
-                  onChange={e => setPaymentReference(e.target.value)}
-                  placeholder="e.g. TXN-928301"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Notes / Narration</label>
-                <textarea
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-750 focus:outline-none h-16 resize-none"
-                  value={paymentNotes}
-                  onChange={e => setPaymentNotes(e.target.value)}
-                  placeholder="Payment remarks..."
-                />
-              </div>
-
-              <div className="flex gap-2 justify-end pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsPaymentModalOpen(false)}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-50 text-slate-500 rounded-lg text-xs font-bold transition"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-md shadow-emerald-600/10 transition"
-                >
-                  Submit Payment
-                </button>
               </div>
             </form>
           </div>

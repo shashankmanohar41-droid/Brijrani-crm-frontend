@@ -34,6 +34,7 @@ export default function QualityControlPage() {
   const [qualityParams, setQualityParams] = useState<QualityParameter[]>([]);
 
   // Search & Multi-Filters State (Section 18)
+  const [activeTab, setActiveTab] = useState<'pending' | 'all' | 'Draft' | 'Submitted' | 'Approved' | 'Rejected'>('pending');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterParty, setFilterParty] = useState('');
   const [filterCommodity, setFilterCommodity] = useState('');
@@ -177,11 +178,22 @@ export default function QualityControlPage() {
         }
       }
 
-      let rulesToUse = matchingRules;
+      // Deduplicate matching rules by parameterName so each parameter is configured only ONCE
+      const uniqueRules: QualityRebateRule[] = [];
+      const seenParams = new Set<string>();
+      for (const r of matchingRules) {
+        const paramKey = (r.parameterName || '').toLowerCase().trim();
+        if (paramKey && !seenParams.has(paramKey)) {
+          seenParams.add(paramKey);
+          uniqueRules.push(r);
+        }
+      }
+
+      let rulesToUse = uniqueRules;
       if (formRebateType === 'Single Rebate') {
-        rulesToUse = matchingRules.slice(0, 1);
+        rulesToUse = uniqueRules.slice(0, 1);
       } else if (formRebateType === 'Double Rebate') {
-        rulesToUse = matchingRules.slice(0, 2);
+        rulesToUse = uniqueRules.slice(0, 2);
       }
 
       setFormParameters(rulesToUse.map(r => {
@@ -455,11 +467,7 @@ export default function QualityControlPage() {
   };
 
   // Open Add QC Modal
-  const handleOpenCreateModal = () => {
-    if (availablePOs.length === 0) {
-      showToast('All approved Purchase Orders already have Quality Control inspections completed! Please create a new PO first.', 'info');
-    }
-
+  const handleOpenCreateModal = (presetPoNo?: string, presetInvoiceNo?: string) => {
     const now = new Date();
     const yr = now.getFullYear();
     const mo = String(now.getMonth() + 1).padStart(2, '0');
@@ -476,8 +484,11 @@ export default function QualityControlPage() {
     setFormNotes('');
     setModificationReasonInput('');
 
-    // Pre-populate from first available PO if any
-    if (availablePOs.length > 0) {
+    if (presetPoNo) {
+      handleSelectReferencePo(presetPoNo, presetInvoiceNo);
+    } else if (presetInvoiceNo) {
+      handleSelectReferenceInvoice(presetInvoiceNo);
+    } else if (availablePOs.length > 0) {
       const firstPo = availablePOs[0];
       handleSelectReferencePo(firstPo.poNo || (firstPo as any).poNumber || firstPo.id);
     } else {
@@ -488,6 +499,7 @@ export default function QualityControlPage() {
       setFormCommodityId('');
       setFormQuantity(100);
       setFormBaseRate(25000);
+      showToast('All approved Purchase Orders already have Quality Control inspections completed! Please create a new PO first.', 'info');
     }
 
     setIsFormOpen(true);
@@ -527,7 +539,14 @@ export default function QualityControlPage() {
     setFormNotes(qc.notes || '');
 
     if (qc.qualityParameters && qc.qualityParameters.length > 0) {
-      setFormParameters(qc.qualityParameters.map(p => ({
+      const seen = new Set<string>();
+      const uniqueParams = qc.qualityParameters.filter(p => {
+        const k = (p.parameterName || '').toLowerCase().trim();
+        if (!k || seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+      setFormParameters(uniqueParams.map(p => ({
         parameterName: p.parameterName,
         actualValue: p.actualValue,
         unit: p.unit || '%',
@@ -841,9 +860,144 @@ export default function QualityControlPage() {
     showToast(`Downloaded Certificate (${cleanFileName})`, 'success');
   };
 
+  // Compile all shipments/orders awaiting Quality Control (Pending QC Queue)
+  const pendingQCItems = useMemo(() => {
+    const list: Array<{
+      id: string;
+      poNo: string;
+      poId: string;
+      invoiceNo?: string;
+      invoiceId?: string;
+      grnNo?: string;
+      grnId?: string;
+      partyType: 'supplier' | 'farmer';
+      partyId: string;
+      partyName: string;
+      commodityName: string;
+      commodityId: string;
+      quantity: number;
+      unit: string;
+      baseRate: number;
+      grossValue: number;
+      date: string;
+      vehicleNo: string;
+      notes?: string;
+    }> = [];
+
+    // 1. From Available Approved POs that do not yet have QC
+    availablePOs.forEach(po => {
+      const partyName = po.partyType === 'supplier'
+        ? db.suppliers.find(s => s.id === po.partyId || (s as any)._id === po.partyId)?.name || 'Commercial Supplier'
+        : db.farmers.find(f => f.id === po.partyId || (f as any)._id === po.partyId)?.name || 'Farmer';
+
+      const linkedInv = db.purchaseInvoices.find(i => i.poNumber === po.poNo || i.poNumber === po.id);
+      const linkedGrn = db.grns.find(g => g.poNo === po.poNo || g.poId === po.id);
+
+      const firstItem = po.items && po.items.length > 0 ? po.items[0] : null;
+      const rawItemVal = firstItem ? (typeof firstItem.item === 'object' && firstItem.item !== null ? String((firstItem.item as any)?._id || (firstItem.item as any)?.name || '') : String(firstItem.item || '')) : '';
+      const comm = db.commodities.find(c => 
+        (c.id && (c.id === rawItemVal || (c as any)._id === rawItemVal)) ||
+        c.name?.toLowerCase() === rawItemVal.toLowerCase()
+      );
+
+      const qty = firstItem?.quantity || 100;
+      const rate = firstItem?.rate || 25000;
+
+      list.push({
+        id: `po-${po.id || (po as any)._id || po.poNo}`,
+        poNo: po.poNo || (po as any).poNumber || '',
+        poId: po.id || (po as any)._id || '',
+        invoiceNo: linkedInv?.invoiceNo,
+        invoiceId: linkedInv?.id,
+        grnNo: linkedGrn?.grnNo,
+        grnId: linkedGrn?.id,
+        partyType: po.partyType || 'supplier',
+        partyId: String(po.partyId || ''),
+        partyName,
+        commodityName: comm?.name || rawItemVal || 'Agricultural Commodity',
+        commodityId: comm?.id || (comm as any)?._id || rawItemVal,
+        quantity: qty,
+        unit: firstItem?.unit || 'MT',
+        baseRate: rate,
+        grossValue: qty * rate,
+        date: po.date || (po as any).orderDate || new Date().toISOString().split('T')[0],
+        vehicleNo: linkedGrn?.vehicleNo || (po as any).vehicleNo || 'BR-01-GB-4590',
+        notes: po.notes || (linkedGrn ? `Cargo arrived at warehouse gate (${linkedGrn.grnNo})` : 'Approved PO awaiting cargo arrival & QC')
+      });
+    });
+
+    // 2. Also check any standalone preliminary invoices without QC that might not have matched availablePOs
+    availableInvoices.forEach(inv => {
+      if (inv.poNumber && list.some(item => item.poNo === inv.poNumber)) return;
+      if (list.some(item => item.invoiceNo === inv.invoiceNo)) return;
+
+      const partyName = inv.partyType === 'supplier'
+        ? db.suppliers.find(s => s.id === inv.supplierId || (s as any)._id === inv.supplierId)?.name || 'Commercial Supplier'
+        : db.farmers.find(f => f.id === inv.supplierId || (f as any)._id === inv.supplierId)?.name || 'Farmer';
+
+      const firstItem = inv.items && inv.items.length > 0 ? inv.items[0] : null;
+      const comm = db.commodities.find(c => c.id === firstItem?.item || (c as any)._id === firstItem?.item || c.name?.toLowerCase() === String(firstItem?.item).toLowerCase());
+      const qty = firstItem?.invoiceQty || firstItem?.poQty || 100;
+      const rate = firstItem?.baseRate || firstItem?.rate || 25000;
+
+      list.push({
+        id: `inv-${inv.id || inv.invoiceNo}`,
+        poNo: inv.poNumber || 'N/A',
+        poId: '',
+        invoiceNo: inv.invoiceNo,
+        invoiceId: inv.id,
+        grnNo: (inv as any).grnNumber,
+        partyType: inv.partyType || 'supplier',
+        partyId: inv.supplierId || '',
+        partyName,
+        commodityName: comm?.name || String(firstItem?.item || 'Agricultural Commodity'),
+        commodityId: comm?.id || (comm as any)?._id || String(firstItem?.item || ''),
+        quantity: qty,
+        unit: (firstItem as any)?.unit || 'MT',
+        baseRate: rate,
+        grossValue: qty * rate,
+        date: inv.invoiceDate || (inv as any).date || new Date().toISOString().split('T')[0],
+        vehicleNo: (inv as any).vehicleNo || 'Pending Arrival',
+        notes: `Preliminary invoice ${inv.invoiceNo} awaiting quality inspection`
+      });
+    });
+
+    return list;
+  }, [availablePOs, availableInvoices, db.suppliers, db.farmers, db.commodities, db.purchaseInvoices, db.grns]);
+
+  // Filtered Pending QC Items
+  const filteredPendingQCItems = useMemo(() => {
+    return pendingQCItems.filter(item => {
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        const match = item.poNo.toLowerCase().includes(q) ||
+          item.partyName.toLowerCase().includes(q) ||
+          item.commodityName.toLowerCase().includes(q) ||
+          (item.invoiceNo && item.invoiceNo.toLowerCase().includes(q)) ||
+          (item.grnNo && item.grnNo.toLowerCase().includes(q)) ||
+          item.vehicleNo.toLowerCase().includes(q);
+        if (!match) return false;
+      }
+      if (filterCommodity && item.commodityId !== filterCommodity) return false;
+      if (filterVehicle && !item.vehicleNo.toLowerCase().includes(filterVehicle.toLowerCase())) return false;
+      if (filterStartDate && new Date(item.date) < new Date(filterStartDate)) return false;
+      if (filterEndDate && new Date(item.date) > new Date(filterEndDate)) return false;
+      return true;
+    });
+  }, [pendingQCItems, searchQuery, filterCommodity, filterVehicle, filterStartDate, filterEndDate]);
+
   // Filtered QC List
   const filteredQcList = useMemo(() => {
     return qcList.filter(qc => {
+      // Tab filter
+      if (activeTab !== 'all' && activeTab !== 'pending') {
+        if (activeTab === 'Submitted') {
+          if (qc.status !== 'Submitted' && qc.status !== 'Under Review') return false;
+        } else if (qc.status !== activeTab) {
+          return false;
+        }
+      }
+
       // Search
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
@@ -864,7 +1018,7 @@ export default function QualityControlPage() {
       if (filterEndDate && new Date(qc.date) > new Date(filterEndDate)) return false;
       return true;
     });
-  }, [qcList, searchQuery, filterParty, filterCommodity, filterVehicle, filterStatus, filterRebateType, filterCalcMethod, filterStartDate, filterEndDate]);
+  }, [qcList, activeTab, searchQuery, filterParty, filterCommodity, filterVehicle, filterStatus, filterRebateType, filterCalcMethod, filterStartDate, filterEndDate]);
 
   // Metric Stats
   const stats = useMemo(() => {
@@ -905,7 +1059,7 @@ export default function QualityControlPage() {
           </button>
 
           <button
-            onClick={handleOpenCreateModal}
+            onClick={() => handleOpenCreateModal()}
             className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold cursor-pointer shadow-md shadow-emerald-600/20 transition"
           >
             <Plus size={15} />
@@ -915,35 +1069,87 @@ export default function QualityControlPage() {
       </div>
 
       {/* 2. Key Metrics Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Total Inspections</div>
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+        {/* Pending QC Queue Card */}
+        <div 
+          onClick={() => setActiveTab('pending')}
+          className={`p-4 rounded-xl border shadow-sm cursor-pointer transition hover:shadow-md ${
+            activeTab === 'pending' 
+              ? 'border-amber-400 bg-amber-50/80 ring-2 ring-amber-400/30' 
+              : 'bg-white border-amber-200 hover:bg-amber-50/20'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-amber-800 uppercase tracking-wider">Pending QC</span>
+            <span className="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-amber-200 text-amber-900 uppercase animate-pulse">Awaiting</span>
+          </div>
+          <div className="text-2xl font-bold text-amber-900 mt-1">{pendingQCItems.length}</div>
+          <div className="text-[10px] text-amber-700 font-semibold mt-0.5">Orders Awaiting QC</div>
+        </div>
+
+        <div 
+          onClick={() => setActiveTab('all')}
+          className={`p-4 rounded-xl border shadow-sm cursor-pointer transition hover:shadow-md ${
+            activeTab === 'all' 
+              ? 'border-slate-400 bg-slate-100 ring-2 ring-slate-400/20' 
+              : 'bg-white border-slate-200 hover:bg-slate-50'
+          }`}
+        >
+          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Total Logged</div>
           <div className="text-2xl font-bold text-slate-900 mt-1">{stats.total}</div>
           <div className="text-[10px] text-slate-400 mt-0.5">Logged QC slips</div>
         </div>
 
-        <div className="bg-white p-4 rounded-xl border border-amber-200 bg-amber-50/20 shadow-sm">
+        <div 
+          onClick={() => setActiveTab('Draft')}
+          className={`p-4 rounded-xl border shadow-sm cursor-pointer transition hover:shadow-md ${
+            activeTab === 'Draft' 
+              ? 'border-amber-400 bg-amber-100/60 ring-2 ring-amber-400/20' 
+              : 'bg-white border-amber-200 bg-amber-50/20 hover:bg-amber-50/40'
+          }`}
+        >
           <div className="text-[11px] font-bold text-amber-700 uppercase tracking-wider">Draft QCs</div>
           <div className="text-2xl font-bold text-amber-800 mt-1">{stats.draft}</div>
           <div className="text-[10px] text-amber-600 mt-0.5">Editable slips</div>
         </div>
 
-        <div className="bg-white p-4 rounded-xl border border-blue-200 bg-blue-50/20 shadow-sm">
+        <div 
+          onClick={() => setActiveTab('Submitted')}
+          className={`p-4 rounded-xl border shadow-sm cursor-pointer transition hover:shadow-md ${
+            activeTab === 'Submitted' 
+              ? 'border-blue-400 bg-blue-100/60 ring-2 ring-blue-400/20' 
+              : 'bg-white border-blue-200 bg-blue-50/20 hover:bg-blue-50/40'
+          }`}
+        >
           <div className="text-[11px] font-bold text-blue-700 uppercase tracking-wider">Under Review</div>
           <div className="text-2xl font-bold text-blue-800 mt-1">{stats.submitted}</div>
-          <div className="text-[10px] text-blue-600 mt-0.5">Awaiting manager approval</div>
+          <div className="text-[10px] text-blue-600 mt-0.5">Awaiting approval</div>
         </div>
 
-        <div className="bg-white p-4 rounded-xl border border-emerald-200 bg-emerald-50/20 shadow-sm">
+        <div 
+          onClick={() => setActiveTab('Approved')}
+          className={`p-4 rounded-xl border shadow-sm cursor-pointer transition hover:shadow-md ${
+            activeTab === 'Approved' 
+              ? 'border-emerald-400 bg-emerald-100/60 ring-2 ring-emerald-400/20' 
+              : 'bg-white border-emerald-200 bg-emerald-50/20 hover:bg-emerald-50/40'
+          }`}
+        >
           <div className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider">Approved</div>
           <div className="text-2xl font-bold text-emerald-800 mt-1">{stats.approved}</div>
           <div className="text-[10px] text-emerald-600 mt-0.5">Finalized & Locked</div>
         </div>
 
-        <div className="bg-white p-4 rounded-xl border border-red-200 bg-red-50/20 shadow-sm">
+        <div 
+          onClick={() => setActiveTab('Rejected')}
+          className={`p-4 rounded-xl border shadow-sm cursor-pointer transition hover:shadow-md ${
+            activeTab === 'Rejected' 
+              ? 'border-red-400 bg-red-100/60 ring-2 ring-red-400/20' 
+              : 'bg-white border-red-200 bg-red-50/20 hover:bg-red-50/40'
+          }`}
+        >
           <div className="text-[11px] font-bold text-red-700 uppercase tracking-wider">Rejected</div>
           <div className="text-2xl font-bold text-red-800 mt-1">{stats.rejected}</div>
-          <div className="text-[10px] text-red-600 mt-0.5">Failed specifications</div>
+          <div className="text-[10px] text-red-600 mt-0.5">Failed specs</div>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
@@ -953,7 +1159,86 @@ export default function QualityControlPage() {
         </div>
       </div>
 
-      {/* 3. Search & Multi-Filter Control Bar (Section 18) */}
+      {/* 3. View Switcher Tabs Bar */}
+      <div className="bg-slate-100/80 border border-slate-200 rounded-xl p-1.5 flex items-center gap-1.5 flex-wrap">
+        <button
+          onClick={() => setActiveTab('pending')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+            activeTab === 'pending'
+              ? 'bg-amber-600 text-white shadow-md shadow-amber-600/20'
+              : 'text-slate-600 hover:bg-white hover:text-slate-900'
+          }`}
+        >
+          <Clock size={14} className={activeTab === 'pending' ? 'text-white' : 'text-amber-600'} />
+          <span>Pending QC Queue</span>
+          <span className={`px-2 py-0.2 rounded-full text-[10px] font-extrabold ${
+            activeTab === 'pending' ? 'bg-amber-800 text-white' : 'bg-amber-100 text-amber-800'
+          }`}>
+            {pendingQCItems.length}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('all')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+            activeTab === 'all'
+              ? 'bg-white text-slate-900 shadow-sm border border-slate-200'
+              : 'text-slate-600 hover:bg-white hover:text-slate-900'
+          }`}
+        >
+          <ClipboardCheck size={14} className="text-slate-500" />
+          <span>All Logged QC Slips</span>
+          <span className="px-2 py-0.2 rounded-full text-[10px] font-bold bg-slate-200 text-slate-700">
+            {qcList.length}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('Draft')}
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+            activeTab === 'Draft'
+              ? 'bg-white text-amber-800 shadow-sm border border-amber-200 font-bold'
+              : 'text-slate-600 hover:bg-white hover:text-slate-900'
+          }`}
+        >
+          <span>Drafts ({stats.draft})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('Submitted')}
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+            activeTab === 'Submitted'
+              ? 'bg-white text-blue-800 shadow-sm border border-blue-200 font-bold'
+              : 'text-slate-600 hover:bg-white hover:text-slate-900'
+          }`}
+        >
+          <span>Under Review ({stats.submitted})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('Approved')}
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+            activeTab === 'Approved'
+              ? 'bg-white text-emerald-800 shadow-sm border border-emerald-200 font-bold'
+              : 'text-slate-600 hover:bg-white hover:text-slate-900'
+          }`}
+        >
+          <span>Approved ({stats.approved})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('Rejected')}
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+            activeTab === 'Rejected'
+              ? 'bg-white text-red-800 shadow-sm border border-red-200 font-bold'
+              : 'text-slate-600 hover:bg-white hover:text-slate-900'
+          }`}
+        >
+          <span>Rejected ({stats.rejected})</span>
+        </button>
+      </div>
+
+      {/* 4. Search & Multi-Filter Control Bar (Section 18) */}
       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2.5">
           {/* Search */}
@@ -961,7 +1246,7 @@ export default function QualityControlPage() {
             <Search size={14} className="absolute left-3 top-3 text-slate-400" />
             <input
               type="text"
-              placeholder="Search QC No, Partner, Vehicle..."
+              placeholder={activeTab === 'pending' ? "Search Pending PO, Supplier, Item..." : "Search QC No, Partner, Vehicle..."}
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500"
@@ -1015,7 +1300,12 @@ export default function QualityControlPage() {
           <div>
             <select
               value={filterStatus}
-              onChange={e => setFilterStatus(e.target.value)}
+              onChange={e => {
+                setFilterStatus(e.target.value);
+                if (e.target.value) {
+                  setActiveTab(e.target.value as any);
+                }
+              }}
               className="w-full py-2 px-2.5 text-xs border border-slate-200 rounded-lg bg-white text-slate-700"
             >
               <option value="">All Statuses</option>
@@ -1052,7 +1342,7 @@ export default function QualityControlPage() {
 
         {(searchQuery || filterCommodity || filterRebateType || filterCalcMethod || filterStatus || filterStartDate || filterEndDate) && (
           <div className="flex items-center justify-between text-xs text-slate-500 pt-1 border-t border-slate-100">
-            <span>Filtered results: <strong>{filteredQcList.length}</strong> matching records</span>
+            <span>Filtered results: <strong>{activeTab === 'pending' ? filteredPendingQCItems.length : filteredQcList.length}</strong> matching records</span>
             <button
               onClick={() => {
                 setSearchQuery('');
@@ -1073,229 +1363,363 @@ export default function QualityControlPage() {
         )}
       </div>
 
-      {/* 4. QC Master List Table (All 13 Required Columns - Section 1) */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-700 border-collapse">
-            <thead className="bg-slate-50 border-b border-slate-200 text-[11px] uppercase tracking-wider text-slate-500 font-bold">
-              <tr>
-                <th className="py-3 px-3">QC Number</th>
-                <th className="py-3 px-3">Supplier / Farmer</th>
-                <th className="py-3 px-3">Commodity</th>
-                <th className="py-3 px-3">Vehicle No</th>
-                <th className="py-3 px-3 text-right">Quantity</th>
-                <th className="py-3 px-3 text-right">Rate</th>
-                <th className="py-3 px-3">Rebate Type</th>
-                <th className="py-3 px-3">Calc Method</th>
-                <th className="py-3 px-3 text-right">Total Rebate</th>
-                <th className="py-3 px-3 text-right">Final Rate</th>
-                <th className="py-3 px-3 text-right">Final Value</th>
-                <th className="py-3 px-3 text-center">Status</th>
-                <th className="py-3 px-3">Date</th>
-                <th className="py-3 px-3 text-center">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filteredQcList.length === 0 ? (
+      {/* 5. Main Table: PENDING QC QUEUE vs LOGGED QC SLIPS */}
+      {activeTab === 'pending' ? (
+        /* PENDING QC QUEUE TABLE */
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="px-5 py-3.5 bg-gradient-to-r from-amber-50 to-orange-50/30 border-b border-amber-200/60 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Clock size={16} className="text-amber-700" />
+              <div>
+                <h3 className="text-xs font-bold text-amber-900 uppercase tracking-wider">Pending Quality Inspection Queue</h3>
+                <p className="text-[10px] text-amber-700">Incoming cargo arrivals & purchase orders awaiting laboratory quality testing & rebate rating</p>
+              </div>
+            </div>
+            <span className="px-2.5 py-1 rounded-full text-xs font-extrabold bg-amber-200 text-amber-900 border border-amber-300">
+              {filteredPendingQCItems.length} Shipments Awaiting QC
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-slate-700 border-collapse">
+              <thead className="bg-slate-50 border-b border-slate-200 text-[11px] uppercase tracking-wider text-slate-500 font-bold">
                 <tr>
-                  <td colSpan={14} className="py-8 text-center text-slate-400">
-                    <FlaskConical size={32} className="mx-auto mb-2 text-slate-300 opacity-60" />
-                    <p className="font-semibold">No Quality Control records found</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">Click &quot;New Quality Inspection&quot; to log your first QC record</p>
-                  </td>
+                  <th className="py-3 px-3.5">PO / Order Ref</th>
+                  <th className="py-3 px-3">Linked Invoice / Gate GRN</th>
+                  <th className="py-3 px-3">Supplier / Farmer</th>
+                  <th className="py-3 px-3">Commodity Item</th>
+                  <th className="py-3 px-3 text-right">Quantity</th>
+                  <th className="py-3 px-3 text-right">Base Rate</th>
+                  <th className="py-3 px-3 text-right">Estimated Value</th>
+                  <th className="py-3 px-3">Vehicle / Arrival</th>
+                  <th className="py-3 px-3 text-center">QC Status</th>
+                  <th className="py-3 px-3.5 text-center">Action</th>
                 </tr>
-              ) : (
-                filteredQcList.map(qc => (
-                  <tr key={qc._id || qc.id} className="hover:bg-slate-50/80 transition-colors">
-                    {/* QC Number */}
-                    <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">
-                      <button
-                        onClick={() => handleViewDetails(qc)}
-                        className="text-emerald-600 hover:text-emerald-800 hover:underline cursor-pointer"
-                      >
-                        {qc.qcNumber}
-                      </button>
-                    </td>
-
-                    {/* Supplier / Farmer */}
-                    <td className="py-3 px-3 whitespace-nowrap">
-                      <div className="font-semibold text-slate-800">{qc.partyName}</div>
-                      <div className="text-[10px] text-slate-400 uppercase font-medium">{qc.partyType}</div>
-                    </td>
-
-                    {/* Commodity */}
-                    <td className="py-3 px-3 whitespace-nowrap font-medium text-slate-800">
-                      {qc.commodityName}
-                    </td>
-
-                    {/* Vehicle Number */}
-                    <td className="py-3 px-3 whitespace-nowrap font-mono text-[11px] text-slate-600">
-                      {qc.vehicleNumber || '-'}
-                    </td>
-
-                    {/* Quantity */}
-                    <td className="py-3 px-3 text-right font-bold text-slate-900 whitespace-nowrap">
-                      {qc.quantity} <span className="text-[10px] font-normal text-slate-400">{qc.unit || 'MT'}</span>
-                    </td>
-
-                    {/* Rate */}
-                    <td className="py-3 px-3 text-right whitespace-nowrap text-slate-700">
-                      ₹{qc.baseRate.toLocaleString('en-IN')}
-                    </td>
-
-                    {/* Rebate Type */}
-                    <td className="py-3 px-3 whitespace-nowrap">
-                      <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                        {qc.rebateType}
-                      </span>
-                    </td>
-
-                    {/* Calculation Method */}
-                    <td className="py-3 px-3 whitespace-nowrap">
-                      <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-semibold ${
-                        qc.calculationMethod === 'Pro-Rata' 
-                          ? 'bg-purple-50 text-purple-700 border border-purple-200' 
-                          : 'bg-amber-50 text-amber-700 border border-amber-200'
-                      }`}>
-                        {qc.calculationMethod}
-                      </span>
-                    </td>
-
-                    {/* Total Rebate */}
-                    <td className="py-3 px-3 text-right whitespace-nowrap font-bold text-red-600">
-                      {qc.totalRebate > 0 ? `- ₹${qc.totalRebate.toLocaleString('en-IN')}` : '₹0'}
-                    </td>
-
-                    {/* Final Rate */}
-                    <td className="py-3 px-3 text-right whitespace-nowrap font-bold text-slate-900">
-                      ₹{qc.finalRate.toLocaleString('en-IN')}
-                    </td>
-
-                    {/* Final Value */}
-                    <td className="py-3 px-3 text-right whitespace-nowrap font-bold text-emerald-700">
-                      ₹{qc.finalValue.toLocaleString('en-IN')}
-                    </td>
-
-                    {/* Status Badge */}
-                    <td className="py-3 px-3 text-center whitespace-nowrap">
-                      <span className={`inline-flex px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                        qc.status === 'Approved' ? 'bg-emerald-100 text-emerald-800' :
-                        qc.status === 'Submitted' ? 'bg-blue-100 text-blue-800' :
-                        qc.status === 'Under Review' ? 'bg-indigo-100 text-indigo-800' :
-                        qc.status === 'Rejected' ? 'bg-red-100 text-red-800' :
-                        'bg-amber-100 text-amber-800'
-                      }`}>
-                        {qc.status}
-                      </span>
-                    </td>
-
-                    {/* Date */}
-                    <td className="py-3 px-3 whitespace-nowrap text-slate-500 text-[11px]">
-                      {formatDate(qc.date)}
-                    </td>
-
-                    {/* Actions Menu (View, Edit, Submit, Approve, Reject, Print, Download) */}
-                    <td className="py-3 px-3 whitespace-nowrap text-center">
-                      <div className="flex items-center justify-center gap-1">
-                        {/* View */}
-                        <button
-                          onClick={() => handleViewDetails(qc)}
-                          className="p-1 text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 rounded transition cursor-pointer"
-                          title="View complete QC breakdown"
-                        >
-                          <Eye size={14} />
-                        </button>
-
-                        {/* Edit */}
-                        <button
-                          onClick={() => handleOpenEdit(qc)}
-                          className="p-1 text-slate-500 hover:text-blue-700 hover:bg-blue-50 rounded transition cursor-pointer"
-                          title={qc.status === 'Approved' ? 'Request authorized edit with reason' : 'Edit QC'}
-                        >
-                          <Edit3 size={14} />
-                        </button>
-
-                        {/* Submit (if Draft) */}
-                        {qc.status === 'Draft' && (
-                          <button
-                            onClick={() => handleSubmitQC(qc)}
-                            className="p-1 text-amber-600 hover:text-amber-800 hover:bg-amber-50 rounded transition cursor-pointer"
-                            title="Submit for Approval"
-                          >
-                            <FileCheck size={14} />
-                          </button>
-                        )}
-
-                        {/* Approve (if Submitted / Draft) */}
-                        {qc.status !== 'Approved' && qc.status !== 'Rejected' && (
-                          <button
-                            onClick={() => handleApproveQC(qc)}
-                            className="p-1 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded transition cursor-pointer"
-                            title="Approve QC"
-                          >
-                            <CheckCircle2 size={14} />
-                          </button>
-                        )}
-
-                        {/* Create Purchase Invoice (if Approved or Submitted) */}
-                        {qc.status !== 'Rejected' && (
-                          <button
-                            onClick={() => router.push(`/procurement/invoices?qc=${qc._id || qc.id}&action=new`)}
-                            className="p-1 text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded transition cursor-pointer"
-                            title="Generate Purchase Invoice according to QC Rebate"
-                          >
-                            <FileText size={14} />
-                          </button>
-                        )}
-
-                        {/* Reject */}
-                        {qc.status !== 'Rejected' && (
-                          <button
-                            onClick={() => handleOpenRejectModal(qc)}
-                            className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition cursor-pointer"
-                            title="Reject QC"
-                          >
-                            <ShieldAlert size={14} />
-                          </button>
-                        )}
-
-                        {/* Print */}
-                        <button
-                          onClick={() => handleOpenPrint(qc)}
-                          className="p-1 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded transition cursor-pointer"
-                          title="Print QC Voucher"
-                        >
-                          <Printer size={14} />
-                        </button>
-
-                        {/* Download PDF */}
-                        <button
-                          onClick={() => handleDownloadPDF(qc)}
-                          className="p-1 text-slate-500 hover:text-purple-700 hover:bg-purple-50 rounded transition cursor-pointer"
-                          title="Download PDF Certificate"
-                        >
-                          <Download size={14} />
-                        </button>
-
-                        {/* Delete (if Draft) */}
-                        {qc.status === 'Draft' && (
-                          <button
-                            onClick={() => handleDeleteQC(qc)}
-                            className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded transition cursor-pointer"
-                            title="Delete Draft"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        )}
-                      </div>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredPendingQCItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className="py-12 text-center text-slate-400">
+                      <CheckCircle2 size={36} className="mx-auto mb-2 text-emerald-400 opacity-80" />
+                      <p className="font-bold text-slate-700">All Quality Inspections Are Up To Date!</p>
+                      <p className="text-[11px] text-slate-400 mt-1">There are currently no purchase orders or incoming gate receipts pending quality assessment.</p>
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  filteredPendingQCItems.map(item => (
+                    <tr key={item.id} className="hover:bg-amber-50/30 transition-colors">
+                      {/* PO Ref */}
+                      <td className="py-3 px-3.5 whitespace-nowrap font-bold text-slate-900">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-primary-700 font-mono font-bold">{item.poNo}</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-normal">{formatDate(item.date)}</div>
+                      </td>
+
+                      {/* Linked Invoice / GRN */}
+                      <td className="py-3 px-3 whitespace-nowrap text-xs">
+                        {item.invoiceNo ? (
+                          <div className="font-bold text-indigo-700 flex items-center gap-1">
+                            <FileText size={11} />
+                            <span>{item.invoiceNo}</span>
+                          </div>
+                        ) : null}
+                        {item.grnNo ? (
+                          <div className="font-bold text-emerald-700 flex items-center gap-1 mt-0.5">
+                            <Scale size={11} />
+                            <span>{item.grnNo}</span>
+                          </div>
+                        ) : null}
+                        {!item.invoiceNo && !item.grnNo && (
+                          <span className="text-slate-400 text-[10px] italic">Direct PO</span>
+                        )}
+                      </td>
+
+                      {/* Supplier / Farmer */}
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <div className="font-semibold text-slate-800">{item.partyName}</div>
+                        <span className={`inline-block px-1.5 py-0.2 rounded text-[9px] font-bold uppercase tracking-wider ${
+                          item.partyType === 'farmer' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-blue-50 text-blue-700 border border-blue-200'
+                        }`}>
+                          {item.partyType}
+                        </span>
+                      </td>
+
+                      {/* Commodity */}
+                      <td className="py-3 px-3 whitespace-nowrap font-medium text-slate-800">
+                        <span className="font-bold text-slate-900">{item.commodityName}</span>
+                      </td>
+
+                      {/* Quantity */}
+                      <td className="py-3 px-3 text-right font-bold text-slate-900 whitespace-nowrap">
+                        {item.quantity} <span className="text-[10px] font-normal text-slate-400">{item.unit}</span>
+                      </td>
+
+                      {/* Base Rate */}
+                      <td className="py-3 px-3 text-right whitespace-nowrap text-slate-700 font-medium">
+                        ₹{item.baseRate.toLocaleString('en-IN')}
+                      </td>
+
+                      {/* Gross Value */}
+                      <td className="py-3 px-3 text-right whitespace-nowrap font-bold text-slate-900">
+                        ₹{item.grossValue.toLocaleString('en-IN')}
+                      </td>
+
+                      {/* Vehicle / Arrival */}
+                      <td className="py-3 px-3 whitespace-nowrap text-slate-600">
+                        <div className="font-mono text-[11px] font-semibold text-slate-700">{item.vehicleNo}</div>
+                      </td>
+
+                      {/* Status */}
+                      <td className="py-3 px-3 text-center whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 animate-pulse">
+                          <Clock size={10} />
+                          <span>Pending QC</span>
+                        </span>
+                      </td>
+
+                      {/* Action */}
+                      <td className="py-3 px-3.5 text-center whitespace-nowrap">
+                        <button
+                          onClick={() => handleOpenCreateModal(item.poNo, item.invoiceNo)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-sm shadow-emerald-600/20 cursor-pointer transition"
+                        >
+                          <FlaskConical size={13} />
+                          <span>Start Quality Inspection</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      ) : (
+        /* LOGGED QC SLIPS MASTER TABLE */
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-slate-700 border-collapse">
+              <thead className="bg-slate-50 border-b border-slate-200 text-[11px] uppercase tracking-wider text-slate-500 font-bold">
+                <tr>
+                  <th className="py-3 px-3">QC Number</th>
+                  <th className="py-3 px-3">Supplier / Farmer</th>
+                  <th className="py-3 px-3">Commodity</th>
+                  <th className="py-3 px-3">Vehicle No</th>
+                  <th className="py-3 px-3 text-right">Quantity</th>
+                  <th className="py-3 px-3 text-right">Rate</th>
+                  <th className="py-3 px-3">Rebate Type</th>
+                  <th className="py-3 px-3">Calc Method</th>
+                  <th className="py-3 px-3 text-right">Total Rebate</th>
+                  <th className="py-3 px-3 text-right">Final Rate</th>
+                  <th className="py-3 px-3 text-right">Final Value</th>
+                  <th className="py-3 px-3 text-center">Status</th>
+                  <th className="py-3 px-3">Date</th>
+                  <th className="py-3 px-3 text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredQcList.length === 0 ? (
+                  <tr>
+                    <td colSpan={14} className="py-8 text-center text-slate-400">
+                      <FlaskConical size={32} className="mx-auto mb-2 text-slate-300 opacity-60" />
+                      <p className="font-semibold">No Quality Control records found</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">Click &quot;New Quality Inspection&quot; to log your first QC record</p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredQcList.map(qc => (
+                    <tr key={qc._id || qc.id} className="hover:bg-slate-50/80 transition-colors">
+                      {/* QC Number */}
+                      <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">
+                        <button
+                          onClick={() => handleViewDetails(qc)}
+                          className="text-emerald-600 hover:text-emerald-800 hover:underline cursor-pointer"
+                        >
+                          {qc.qcNumber}
+                        </button>
+                      </td>
+
+                      {/* Supplier / Farmer */}
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <div className="font-semibold text-slate-800">{qc.partyName}</div>
+                        <div className="text-[10px] text-slate-400 uppercase font-medium">{qc.partyType}</div>
+                      </td>
+
+                      {/* Commodity */}
+                      <td className="py-3 px-3 whitespace-nowrap font-medium text-slate-800">
+                        {qc.commodityName}
+                      </td>
+
+                      {/* Vehicle Number */}
+                      <td className="py-3 px-3 whitespace-nowrap font-mono text-[11px] text-slate-600">
+                        {qc.vehicleNumber || '-'}
+                      </td>
+
+                      {/* Quantity */}
+                      <td className="py-3 px-3 text-right font-bold text-slate-900 whitespace-nowrap">
+                        {qc.quantity} <span className="text-[10px] font-normal text-slate-400">{qc.unit || 'MT'}</span>
+                      </td>
+
+                      {/* Rate */}
+                      <td className="py-3 px-3 text-right whitespace-nowrap text-slate-700">
+                        ₹{qc.baseRate.toLocaleString('en-IN')}
+                      </td>
+
+                      {/* Rebate Type */}
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                          {qc.rebateType}
+                        </span>
+                      </td>
+
+                      {/* Calculation Method */}
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-semibold ${
+                          qc.calculationMethod === 'Pro-Rata' 
+                            ? 'bg-purple-50 text-purple-700 border border-purple-200' 
+                            : 'bg-amber-50 text-amber-700 border border-amber-200'
+                        }`}>
+                          {qc.calculationMethod}
+                        </span>
+                      </td>
+
+                      {/* Total Rebate */}
+                      <td className="py-3 px-3 text-right whitespace-nowrap font-bold text-red-600">
+                        {qc.totalRebate > 0 ? `- ₹${qc.totalRebate.toLocaleString('en-IN')}` : '₹0'}
+                      </td>
+
+                      {/* Final Rate */}
+                      <td className="py-3 px-3 text-right whitespace-nowrap font-bold text-slate-900">
+                        ₹{qc.finalRate.toLocaleString('en-IN')}
+                      </td>
+
+                      {/* Final Value */}
+                      <td className="py-3 px-3 text-right whitespace-nowrap font-bold text-emerald-700">
+                        ₹{qc.finalValue.toLocaleString('en-IN')}
+                      </td>
+
+                      {/* Status Badge */}
+                      <td className="py-3 px-3 text-center whitespace-nowrap">
+                        <span className={`inline-flex px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                          qc.status === 'Approved' ? 'bg-emerald-100 text-emerald-800' :
+                          qc.status === 'Submitted' ? 'bg-blue-100 text-blue-800' :
+                          qc.status === 'Under Review' ? 'bg-indigo-100 text-indigo-800' :
+                          qc.status === 'Rejected' ? 'bg-red-100 text-red-800' :
+                          'bg-amber-100 text-amber-800'
+                        }`}>
+                          {qc.status}
+                        </span>
+                      </td>
+
+                      {/* Date */}
+                      <td className="py-3 px-3 whitespace-nowrap text-slate-500 text-[11px]">
+                        {formatDate(qc.date)}
+                      </td>
+
+                      {/* Actions Menu (View, Edit, Submit, Approve, Reject, Print, Download) */}
+                      <td className="py-3 px-3 whitespace-nowrap text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          {/* View */}
+                          <button
+                            onClick={() => handleViewDetails(qc)}
+                            className="p-1 text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 rounded transition cursor-pointer"
+                            title="View complete QC breakdown"
+                          >
+                            <Eye size={14} />
+                          </button>
+
+                          {/* Edit */}
+                          <button
+                            onClick={() => handleOpenEdit(qc)}
+                            className="p-1 text-slate-500 hover:text-blue-700 hover:bg-blue-50 rounded transition cursor-pointer"
+                            title={qc.status === 'Approved' ? 'Request authorized edit with reason' : 'Edit QC'}
+                          >
+                            <Edit3 size={14} />
+                          </button>
+
+                          {/* Submit (if Draft) */}
+                          {qc.status === 'Draft' && (
+                            <button
+                              onClick={() => handleSubmitQC(qc)}
+                              className="p-1 text-amber-600 hover:text-amber-800 hover:bg-amber-50 rounded transition cursor-pointer"
+                              title="Submit for Approval"
+                            >
+                              <FileCheck size={14} />
+                            </button>
+                          )}
+
+                          {/* Approve (if Submitted / Draft) */}
+                          {qc.status !== 'Approved' && qc.status !== 'Rejected' && (
+                            <button
+                              onClick={() => handleApproveQC(qc)}
+                              className="p-1 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded transition cursor-pointer"
+                              title="Approve QC"
+                            >
+                              <CheckCircle2 size={14} />
+                            </button>
+                          )}
+
+                          {/* Make Final Invoice (if Approved) */}
+                          {qc.status === 'Approved' && (
+                            <button
+                              onClick={() => router.push(`/procurement/final-invoices?qc=${qc._id || qc.id}&action=new`)}
+                              className="p-1 text-emerald-700 hover:text-emerald-900 hover:bg-emerald-100 rounded transition cursor-pointer"
+                              title={`Make Final Invoice (Net Settled Rate: ₹${qc.finalRate.toLocaleString('en-IN')}/${qc.unit || 'MT'})`}
+                            >
+                              <FileText size={14} className="text-emerald-700" />
+                            </button>
+                          )}
+
+                          {/* Reject */}
+                          {qc.status !== 'Rejected' && (
+                            <button
+                              onClick={() => handleOpenRejectModal(qc)}
+                              className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition cursor-pointer"
+                              title="Reject QC"
+                            >
+                              <ShieldAlert size={14} />
+                            </button>
+                          )}
+
+                          {/* Print Slip */}
+                          <button
+                            onClick={() => handleOpenPrint(qc)}
+                            className="p-1 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded transition cursor-pointer"
+                            title="Print Quality Slip"
+                          >
+                            <Printer size={14} />
+                          </button>
+
+                          {/* Download PDF */}
+                          <button
+                            onClick={() => handleDownloadPDF(qc)}
+                            className="p-1 text-slate-500 hover:text-purple-700 hover:bg-purple-50 rounded transition cursor-pointer"
+                            title="Download PDF Certificate"
+                          >
+                            <Download size={14} />
+                          </button>
+
+                          {/* Delete (Draft only) */}
+                          {qc.status === 'Draft' && (
+                            <button
+                              onClick={() => handleDeleteQC(qc)}
+                              className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded transition cursor-pointer"
+                              title="Delete Draft QC"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* 5. CREATE / EDIT QC MODAL & DYNAMIC FORM (Section 2 & 25) */}
@@ -1878,14 +2302,17 @@ export default function QualityControlPage() {
               </div>
 
               <div className="flex items-center gap-2">
-                {selectedQC.status !== 'Rejected' && (
+                {selectedQC.status === 'Approved' && (
                   <button
-                    onClick={() => router.push(`/procurement/invoices?qc=${selectedQC._id || selectedQC.id}&action=new`)}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-bold cursor-pointer shadow-xs transition"
-                    title="Generate Purchase Invoice from this QC"
+                    onClick={() => {
+                      setIsViewModalOpen(false);
+                      router.push(`/procurement/final-invoices?qc=${selectedQC._id || selectedQC.id}&action=new`);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold cursor-pointer shadow-sm transition"
+                    title="Generate final commercial invoice with QC deduction subtracted"
                   >
                     <FileText size={13} />
-                    <span>Create Invoice</span>
+                    <span>Make Final Invoice (After QC Deduction)</span>
                   </button>
                 )}
                 <button

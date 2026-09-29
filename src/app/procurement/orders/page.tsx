@@ -57,6 +57,18 @@ export default function PurchaseOrdersPage() {
 
   const activeParties = partyType === 'supplier' ? suppliers : farmers;
 
+  // Active unbooked Purchase Quotations list (exclude quotations that already have a PO)
+  const availablePurchaseQuotations = useMemo(() => {
+    return (db.purchaseQuotations || []).filter((pq: any) => {
+      if (pq.status === 'Converted' || pq.status === 'Rejected') return false;
+      const alreadyHasPO = (db.purchaseOrders || []).some(po => 
+        (po.quotationNo === pq.quotationNo || (po as any).quotationId === pq.id || po.referenceQuotation === pq.quotationNo) &&
+        po.status !== 'Cancelled'
+      );
+      return !alreadyHasPO;
+    });
+  }, [db.purchaseQuotations, db.purchaseOrders]);
+
   // Track linked documents for the selected PO following PO -> QC -> Invoice -> GRN -> Payment lifecycle
   const linkedQC = useMemo(() => {
     if (!selectedPO) return null;
@@ -106,6 +118,43 @@ export default function PurchaseOrdersPage() {
     setItemQty(0);
     setItemRate(0);
     setItemDescription('');
+  };
+
+  const handleSelectQuotation = (selectedQuotNo: string) => {
+    setReferenceQuotation(selectedQuotNo);
+    if (!selectedQuotNo) return;
+    const pq = (db.purchaseQuotations || []).find((q: any) => q.quotationNo === selectedQuotNo || q.id === selectedQuotNo);
+    if (pq) {
+      if (pq.partyType) setPartyType(pq.partyType);
+      if (pq.partyId) setPartyId(pq.partyId);
+      if (pq.paymentTerms) setPaymentTerms(pq.paymentTerms);
+      if (pq.deliveryDays) setDeliveryTerms(`Delivery within ${pq.deliveryDays} Days`);
+      if (pq.freight) setFreight(pq.freight);
+      if (pq.discount !== undefined || (pq as any).headerDiscount !== undefined) setDiscount(pq.discount || (pq as any).headerDiscount || 0);
+      if ((pq as any).warehouseId) setWarehouseId((pq as any).warehouseId);
+      if (pq.items && pq.items.length > 0) {
+        const mapped: PurchaseOrderItem[] = pq.items.map((item: any) => {
+          const commodity = commodities.find(c => c.id === item.item || (c as any)._id === item.item);
+          const gstRate = item.taxPercent !== undefined ? item.taxPercent : (commodity?.defaultGst !== undefined ? commodity.defaultGst : 5);
+          const baseAmt = item.quantity * item.rate;
+          const taxAmt = Math.round(baseAmt * (gstRate / 100));
+          return {
+            item: item.item,
+            description: item.sku || commodity?.name || 'Grain Item',
+            quantity: item.quantity,
+            unit: item.unit || commodity?.unit || 'MT',
+            rate: item.rate,
+            discount: item.discount || 0,
+            taxPercent: gstRate,
+            taxAmount: taxAmt,
+            amount: baseAmt + taxAmt,
+            expectedDelivery: item.deliveryDate || new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+          };
+        });
+        setItemsList(mapped);
+      }
+      showToast(`Loaded details & items from Purchase Quotation ${pq.quotationNo}`, 'info');
+    }
   };
 
   const handleRemoveItem = (index: number) => {
@@ -263,6 +312,17 @@ export default function PurchaseOrdersPage() {
     };
 
     erpService.purchaseOrders.create(newPO);
+
+    if (referenceQuotation) {
+      const pq = (db.purchaseQuotations || []).find((q: any) => q.quotationNo === referenceQuotation || q.id === referenceQuotation);
+      if (pq) {
+        pq.status = 'Converted';
+        if ((erpService as any).purchaseQuotations?.update) {
+          (erpService as any).purchaseQuotations.update(pq);
+        }
+      }
+    }
+
     refreshDb();
     setIsCreateOpen(false);
     setItemsList([]);
@@ -986,14 +1046,39 @@ export default function PurchaseOrdersPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Link Quotation Ref (Optional)</label>
-                  <input
-                    type="text"
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Link Quotation Ref (Optional)</label>
+                    {referenceQuotation && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReferenceQuotation('');
+                          showToast('Cleared quotation link', 'info');
+                        }}
+                        className="text-[10px] text-primary-600 hover:text-rose-600 font-semibold cursor-pointer"
+                      >
+                        Clear Link
+                      </button>
+                    )}
+                  </div>
+                  <select
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700 focus:outline-none"
                     value={referenceQuotation}
-                    onChange={e => setReferenceQuotation(e.target.value)}
-                    placeholder="e.g. PQ/BR/2026-27/001"
-                  />
+                    onChange={e => handleSelectQuotation(e.target.value)}
+                    disabled={isViewMode}
+                  >
+                    <option value="">-- Direct PO (No Quotation) --</option>
+                    {availablePurchaseQuotations.map((pq: any) => {
+                      const vendorName = pq.partyType === 'farmer'
+                        ? farmers.find(f => f.id === pq.partyId)?.name || 'Farmer'
+                        : suppliers.find(s => s.id === pq.partyId)?.name || 'Supplier';
+                      return (
+                        <option key={pq.id} value={pq.quotationNo}>
+                          {pq.quotationNo} &minus; {vendorName} ({pq.items?.length || 0} items) &minus; Status: {pq.status}
+                        </option>
+                      );
+                    })}
+                  </select>
                 </div>
               </div>
 

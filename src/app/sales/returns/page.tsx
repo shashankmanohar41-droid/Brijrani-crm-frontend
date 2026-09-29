@@ -32,6 +32,20 @@ function ReturnsPageContent() {
   const customers = db.customers;
   const commodities = db.commodities;
 
+  const handleSelectInvoice = (selectedInvNo: string) => {
+    setInvoiceNo(selectedInvNo);
+    if (!selectedInvNo) return;
+    const inv = (db.salesInvoices || []).find((i: any) => i.invoiceNo === selectedInvNo || i.id === selectedInvNo);
+    if (inv) {
+      if (inv.customerId) setCustomerId(inv.customerId);
+      const item = inv.items?.[0];
+      if (item?.commodityId || (inv as any).commodityId) setCommodityId(item?.commodityId || (inv as any).commodityId);
+      if (item?.quantity || (inv as any).quantity) setQuantity(item?.quantity || (inv as any).quantity);
+      if (item?.rate || (inv as any).rate) setRate(item?.rate || (inv as any).rate);
+      showToast(`Loaded details from Sales Invoice ${inv.invoiceNo}`, 'info');
+    }
+  };
+
   const handleCreateReturn = (e: React.FormEvent) => {
     e.preventDefault();
     if (!customerId || !commodityId || !quantity || !rate || !reason) {
@@ -322,14 +336,40 @@ function ReturnsPageContent() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-[10px] font-bold text-slate-400 block mb-1">Ref Invoice / Invoice Number</label>
-                  <input
-                    type="text"
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-[10px] font-bold text-slate-400 block">Ref Sales Invoice (Optional)</label>
+                    {invoiceNo && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setInvoiceNo('');
+                          showToast('Cleared invoice link', 'info');
+                        }}
+                        className="text-[10px] text-primary-600 hover:text-rose-600 font-semibold cursor-pointer"
+                      >
+                        Clear Link
+                      </button>
+                    )}
+                  </div>
+                  <select
                     value={invoiceNo}
-                    onChange={e => setInvoiceNo(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white"
-                    placeholder="INV/BR/2026-27/001"
-                  />
+                    onChange={e => handleSelectInvoice(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-medium text-slate-700"
+                  >
+                    <option value="">-- Direct Return (No Invoice) --</option>
+                    {(db.salesInvoices || []).map((inv: any) => {
+                      const cust = customers.find(c => c.id === inv.customerId);
+                      const item = inv.items?.[0];
+                      const comm = commodities.find(c => c.id === item?.commodityId || c.id === inv.commodityId);
+                      const qty = item?.quantity || inv.quantity || 0;
+                      const rate = item?.rate || inv.rate || 0;
+                      return (
+                        <option key={inv.id} value={inv.invoiceNo}>
+                          {inv.invoiceNo} &minus; {cust?.name || 'Customer'} ({comm?.name || 'Grain'} &minus; {qty} MT @ ₹{rate?.toLocaleString()})
+                        </option>
+                      );
+                    })}
+                  </select>
                 </div>
               </div>
 

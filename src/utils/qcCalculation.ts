@@ -54,10 +54,19 @@ export function calculateQualityRebateFrontend(input: FrontendCalculationInput):
     rebateType = 'Standard Rebate',
     discountRate = 0,
     discountType = 'PERCENT',
-    qualityParameters = [],
+    qualityParameters: rawParams = [],
     applicableRules = [],
     transactionDate = new Date()
   } = input;
+
+  // Deduplicate incoming parameters by parameterName
+  const seenParamKeys = new Set<string>();
+  const qualityParameters = rawParams.filter(p => {
+    const key = (p.parameterName || '').toLowerCase().trim();
+    if (!key || seenParamKeys.has(key)) return false;
+    seenParamKeys.add(key);
+    return true;
+  });
 
   const validQty = Math.max(0, Number(quantity) || 0);
   const validBaseRate = Math.max(0, Number(baseRate) || 0);
